@@ -47,9 +47,6 @@ export default function Navbar() {
               >
                 CHOG CASINO
               </span>
-              <div className="text-xs text-yellow-400/60 tracking-[0.3em] font-light -mt-0.5">
-                PREMIUM GAMING
-              </div>
             </div>
           </motion.div>
 

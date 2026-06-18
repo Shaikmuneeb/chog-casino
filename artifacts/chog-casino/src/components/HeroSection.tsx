@@ -47,14 +47,6 @@ export default function HeroSection() {
           >
             Play Now
           </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.05, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            className="px-10 py-4 rounded-xl font-cinzel font-bold text-sm tracking-[0.2em] uppercase glass border border-yellow-400/40 text-yellow-300 hover:border-yellow-400/70 transition-all duration-200"
-            data-testid="button-learn-more"
-          >
-            Learn More
-          </motion.button>
         </motion.div>
 
         <motion.div
