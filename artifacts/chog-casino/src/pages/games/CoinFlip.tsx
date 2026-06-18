@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import bgImage from "@assets/image_1781811951344.png";
@@ -6,57 +6,119 @@ import headsImg from "@assets/chog_heads_side_1781813831765.png";
 import tailsImg from "@assets/chog_tails_side_1781813835529.png";
 
 type Side = "heads" | "tails";
+type Phase = "idle" | "spinning" | "result";
 
 const STARTING_BALANCE = 10_000;
-const FLIP_DURATION = 1.6;
+const FLIP_DURATION = 2.2;
+
+// ── Web Audio helpers ─────────────────────────────────────────────────────────
+function getAudioCtx() {
+  if (typeof window === "undefined") return null;
+  return new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+}
+
+function playSpin() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  for (let i = 0; i < 8; i++) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(300 + i * 80, ctx.currentTime + i * 0.22);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.22);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.22 + 0.18);
+    osc.start(ctx.currentTime + i * 0.22);
+    osc.stop(ctx.currentTime + i * 0.22 + 0.2);
+  }
+}
+
+function playWin() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const notes = [523, 659, 784, 1047];
+  notes.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.13);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.13 + 0.4);
+    osc.start(ctx.currentTime + i * 0.13);
+    osc.stop(ctx.currentTime + i * 0.13 + 0.45);
+  });
+}
+
+function playLose() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const notes = [330, 277, 220];
+  notes.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sawtooth";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.35);
+    osc.start(ctx.currentTime + i * 0.18);
+    osc.stop(ctx.currentTime + i * 0.18 + 0.4);
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function CoinFlip() {
   const [bet, setBet] = useState("100");
   const [choice, setChoice] = useState<Side>("heads");
-  const [flipping, setFlipping] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Side | null>(null);
   const [won, setWon] = useState<boolean | null>(null);
   const [balance, setBalance] = useState(STARTING_BALANCE);
   const [coinRotation, setCoinRotation] = useState(0);
-  const outcomeRef = useRef<Side>("heads");
-
-  const flip = () => {
-    const betAmount = parseInt(bet) || 0;
-    if (flipping || betAmount <= 0 || betAmount > balance) return;
-
-    setFlipping(true);
-    setResult(null);
-    setWon(null);
-
-    const outcome: Side = Math.random() < 0.5 ? "heads" : "tails";
-    outcomeRef.current = outcome;
-
-    // Spin 4 full rotations (1440°) + land on correct face
-    // heads = even multiples of 360 (0, 360, 720…) → rotateY ends at 0 mod 360
-    // tails = odd multiples of 180 (180, 540, 900…) → rotateY ends at 180 mod 360
-    const spins = 1440;
-    const landOffset = outcome === "heads" ? 0 : 180;
-    const current = coinRotation % 360;
-    const needed = landOffset;
-    const delta = ((needed - current) + 360) % 360 || 360;
-    const finalRotation = coinRotation + spins + delta;
-
-    setCoinRotation(finalRotation);
-
-    setTimeout(() => {
-      setResult(outcome);
-      setWon(outcome === choice);
-      setBalance((b) => outcome === choice ? b + betAmount : b - betAmount);
-      setFlipping(false);
-    }, FLIP_DURATION * 1000);
-  };
+  const [showReaction, setShowReaction] = useState(false);
 
   const betAmount = parseInt(bet) || 0;
-  const canFlip = !flipping && betAmount > 0 && betAmount <= balance;
+  const canFlip = phase === "idle" && betAmount > 0 && betAmount <= balance;
 
-  // Which face is showing right now based on rotation
-  const normalizedRot = coinRotation % 360;
-  const showingFace: Side = (normalizedRot >= 90 && normalizedRot < 270) ? "tails" : "heads";
+  const flip = useCallback(() => {
+    if (!canFlip) return;
+
+    setPhase("spinning");
+    setResult(null);
+    setWon(null);
+    setShowReaction(false);
+    playSpin();
+
+    const outcome: Side = Math.random() < 0.5 ? "heads" : "tails";
+
+    // 5 full spins + land on correct face
+    const spins = 1800;
+    const landOffset = outcome === "heads" ? 0 : 180;
+    const current = coinRotation % 360;
+    const delta = ((landOffset - current) + 360) % 360 || 360;
+    setCoinRotation(coinRotation + spins + delta);
+
+    setTimeout(() => {
+      const didWin = outcome === choice;
+      setResult(outcome);
+      setWon(didWin);
+      setBalance((b) => didWin ? b + betAmount : b - betAmount);
+      setPhase("result");
+      setShowReaction(true);
+      didWin ? playWin() : playLose();
+    }, FLIP_DURATION * 1000);
+  }, [canFlip, coinRotation, choice, betAmount]);
+
+  const reset = () => {
+    setPhase("idle");
+    setResult(null);
+    setWon(null);
+    setShowReaction(false);
+  };
 
   return (
     <GameLayout
@@ -65,121 +127,188 @@ export default function CoinFlip() {
       bgImage={bgImage}
       accentColor="text-neon-gold"
     >
-      <div className="glass rounded-2xl border border-yellow-500/20 p-6 sm:p-8 space-y-6">
+      <div className="glass rounded-2xl border border-yellow-500/20 p-6 sm:p-8 space-y-5">
 
-        {/* Balance */}
+        {/* Balance row */}
         <div className="flex items-center justify-between px-1">
           <div>
             <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">Balance</div>
-            <div className="font-cinzel font-bold text-xl text-yellow-300">
-              {balance.toLocaleString()} <span className="text-sm text-yellow-400/70">$CHOG</span>
-            </div>
+            <motion.div
+              key={balance}
+              initial={{ scale: 1.15 }}
+              animate={{ scale: 1 }}
+              className="font-cinzel font-bold text-xl text-yellow-300"
+            >
+              {balance.toLocaleString()} <span className="text-sm text-yellow-400/60">$CHOG</span>
+            </motion.div>
           </div>
-          {won !== null && !flipping && (
-            <motion.div
-              key={String(won)}
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              className={`font-cinzel font-bold text-sm tracking-widest ${won ? "text-green-400" : "text-red-400"}`}
-            >
-              {won ? `+${betAmount.toLocaleString()}` : `-${betAmount.toLocaleString()}`} $CHOG
-            </motion.div>
-          )}
-        </div>
-
-        {/* 3D Coin */}
-        <div className="flex justify-center py-4">
-          <div className="relative" style={{ perspective: "600px" }}>
-            <motion.div
-              animate={{ rotateY: coinRotation }}
-              transition={{ duration: FLIP_DURATION, ease: [0.25, 0.1, 0.25, 1] }}
-              style={{ transformStyle: "preserve-3d", width: 180, height: 180, position: "relative" }}
-            >
-              {/* Heads face — front */}
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  backfaceVisibility: "hidden",
-                  WebkitBackfaceVisibility: "hidden",
-                }}
+          <AnimatePresence mode="wait">
+            {won !== null && phase === "result" && (
+              <motion.div
+                key={String(won) + betAmount}
+                initial={{ opacity: 0, x: 16, scale: 0.8 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                className={`font-cinzel font-bold text-base tracking-wider ${won ? "text-green-400" : "text-red-400"}`}
               >
-                <img
-                  src={headsImg}
-                  alt="Heads"
-                  className="w-full h-full rounded-full object-cover"
-                  style={{ filter: "drop-shadow(0 0 24px rgba(212,175,55,0.7))" }}
-                />
-              </div>
-
-              {/* Tails face — back */}
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  backfaceVisibility: "hidden",
-                  WebkitBackfaceVisibility: "hidden",
-                  transform: "rotateY(180deg)",
-                }}
-              >
-                <img
-                  src={tailsImg}
-                  alt="Tails"
-                  className="w-full h-full rounded-full object-cover"
-                  style={{ filter: "drop-shadow(0 0 24px rgba(160,80,255,0.7))" }}
-                />
-              </div>
-            </motion.div>
-
-            {/* Glow pulse while flipping */}
-            {flipping && (
-              <div className="absolute inset-0 rounded-full bg-yellow-400/15 blur-2xl animate-pulse pointer-events-none" />
+                {won ? "+" : "-"}{betAmount.toLocaleString()} $CHOG
+              </motion.div>
             )}
-          </div>
+          </AnimatePresence>
         </div>
 
-        {/* Result banner */}
-        <AnimatePresence mode="wait">
-          {won !== null && !flipping && (
+        {/* Coin + Reaction */}
+        <div className="flex justify-center py-2 relative" style={{ minHeight: 220 }}>
+          {/* 3D coin */}
+          <div style={{ perspective: "700px" }}>
             <motion.div
-              key={String(won)}
-              initial={{ opacity: 0, scale: 0.85, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              transition={{ duration: 0.3 }}
-              className={`text-center py-3 px-6 rounded-xl font-cinzel font-bold text-lg tracking-widest border ${
+              animate={{
+                rotateY: coinRotation,
+                scale: phase === "spinning" ? [1, 1.08, 1.05, 1.08, 1] : 1,
+              }}
+              transition={{
+                rotateY: {
+                  duration: FLIP_DURATION,
+                  ease: [0.22, 1, 0.36, 1],
+                },
+                scale: {
+                  duration: FLIP_DURATION,
+                  times: [0, 0.2, 0.5, 0.8, 1],
+                  ease: "easeInOut",
+                },
+              }}
+              style={{
+                transformStyle: "preserve-3d",
+                width: 200,
+                height: 200,
+                position: "relative",
+                filter: phase === "spinning"
+                  ? "drop-shadow(0 0 32px rgba(212,175,55,0.9))"
+                  : won === true
+                  ? "drop-shadow(0 0 28px rgba(74,222,128,0.8))"
+                  : won === false
+                  ? "drop-shadow(0 0 28px rgba(248,113,113,0.7))"
+                  : "drop-shadow(0 0 20px rgba(212,175,55,0.5))",
+              }}
+            >
+              {/* Heads — front */}
+              <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}>
+                <img src={headsImg} alt="Heads" className="w-full h-full rounded-full object-cover" />
+              </div>
+              {/* Tails — back */}
+              <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
+                <img src={tailsImg} alt="Tails" className="w-full h-full rounded-full object-cover" />
+              </div>
+            </motion.div>
+
+            {/* Spin glow ring */}
+            <AnimatePresence>
+              {phase === "spinning" && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.15, 1] }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.8, repeat: Infinity }}
+                  className="absolute inset-0 rounded-full pointer-events-none"
+                  style={{ boxShadow: "0 0 60px 20px rgba(212,175,55,0.35)", borderRadius: "50%" }}
+                />
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Reaction overlay */}
+          <AnimatePresence>
+            {showReaction && phase === "result" && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.5, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ type: "spring", stiffness: 500, damping: 22 }}
+                className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
+              >
+                {won ? (
+                  <>
+                    <motion.div
+                      animate={{ rotate: [0, -10, 10, -8, 8, 0], scale: [1, 1.15, 1] }}
+                      transition={{ duration: 0.6, delay: 0.1 }}
+                      className="text-6xl mb-1 drop-shadow-2xl"
+                    >
+                      🥳
+                    </motion.div>
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.2 }}
+                      className="font-cinzel font-black text-2xl text-green-300 tracking-widest drop-shadow-lg"
+                      style={{ textShadow: "0 0 20px rgba(74,222,128,0.8)" }}
+                    >
+                      YOU WIN!
+                    </motion.div>
+                  </>
+                ) : (
+                  <>
+                    <motion.div
+                      animate={{ rotate: [0, -5, 5, -3, 0] }}
+                      transition={{ duration: 0.5, delay: 0.1 }}
+                      className="text-6xl mb-1 drop-shadow-2xl"
+                    >
+                      😭
+                    </motion.div>
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.2 }}
+                      className="font-cinzel font-black text-2xl text-red-400 tracking-widest drop-shadow-lg"
+                      style={{ textShadow: "0 0 20px rgba(248,113,113,0.7)" }}
+                    >
+                      YOU LOSE
+                    </motion.div>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Result pill */}
+        <AnimatePresence mode="wait">
+          {phase === "result" && result && (
+            <motion.div
+              key={result + String(won)}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25, delay: 0.15 }}
+              className={`text-center py-2.5 rounded-xl font-cinzel font-bold text-sm tracking-[0.2em] uppercase border ${
                 won
-                  ? "bg-green-500/20 border-green-400/40 text-green-300"
-                  : "bg-red-500/20 border-red-400/40 text-red-300"
+                  ? "bg-green-500/15 border-green-400/30 text-green-300"
+                  : "bg-red-500/15 border-red-400/30 text-red-300"
               }`}
               data-testid="flip-result"
             >
-              {won ? "🎉 YOU WIN!" : "💀 YOU LOSE"} — {result?.toUpperCase()}
+              Landed on {result.toUpperCase()} · {won ? `+${betAmount.toLocaleString()}` : `-${betAmount.toLocaleString()}`} $CHOG
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Heads / Tails selector — now with coin images */}
-        <div className="grid grid-cols-2 gap-4">
+        {/* Side selector */}
+        <div className="grid grid-cols-2 gap-3">
           {(["heads", "tails"] as Side[]).map((side) => (
             <motion.button
               key={side}
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => !flipping && setChoice(side)}
-              disabled={flipping}
-              className={`flex items-center justify-center gap-3 py-3 px-4 rounded-xl font-cinzel font-bold text-sm tracking-[0.15em] uppercase border transition-all duration-200 ${
+              whileHover={phase === "idle" ? { scale: 1.04, y: -1 } : {}}
+              whileTap={phase === "idle" ? { scale: 0.96 } : {}}
+              onClick={() => phase === "idle" && setChoice(side)}
+              disabled={phase !== "idle"}
+              className={`flex items-center justify-center gap-3 py-3 px-4 rounded-xl font-cinzel font-bold text-sm tracking-[0.12em] uppercase border transition-all duration-200 ${
                 choice === side
                   ? "bg-yellow-500/20 border-yellow-400/60 text-yellow-300 neon-gold"
                   : "glass border-purple-500/30 text-purple-300 hover:border-yellow-400/30"
-              }`}
+              } disabled:opacity-50`}
               data-testid={`button-choose-${side}`}
             >
-              <img
-                src={side === "heads" ? headsImg : tailsImg}
-                alt={side}
-                className="w-8 h-8 rounded-full object-cover"
-              />
+              <img src={side === "heads" ? headsImg : tailsImg} alt={side} className="w-8 h-8 rounded-full object-cover" />
               {side === "heads" ? "Heads" : "Tails"}
             </motion.button>
           ))}
@@ -197,7 +326,8 @@ export default function CoinFlip() {
             step="1"
             min="1"
             max={balance}
-            className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50 transition-colors"
+            disabled={phase !== "idle"}
+            className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50 transition-colors disabled:opacity-50"
             data-testid="input-bet-amount"
           />
           <div className="flex gap-2">
@@ -205,7 +335,7 @@ export default function CoinFlip() {
               <button
                 key={v}
                 onClick={() => setBet(v)}
-                disabled={flipping}
+                disabled={phase !== "idle"}
                 className="flex-1 py-1.5 rounded-lg text-xs glass border border-purple-700/30 text-purple-300 hover:border-yellow-400/30 hover:text-yellow-300 transition-colors disabled:opacity-40"
                 data-testid={`button-bet-preset-${v}`}
               >
@@ -214,7 +344,7 @@ export default function CoinFlip() {
             ))}
             <button
               onClick={() => setBet(String(balance))}
-              disabled={flipping}
+              disabled={phase !== "idle"}
               className="flex-1 py-1.5 rounded-lg text-xs glass border border-yellow-600/40 text-yellow-400 hover:border-yellow-400/60 transition-colors disabled:opacity-40"
               data-testid="button-bet-max"
             >
@@ -223,20 +353,37 @@ export default function CoinFlip() {
           </div>
         </div>
 
-        {/* Flip button */}
-        <motion.button
-          whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
-          whileTap={canFlip ? { scale: 0.97 } : {}}
-          onClick={flip}
-          disabled={!canFlip}
-          className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-yellow-500 to-yellow-700 text-black neon-gold border border-yellow-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          data-testid="button-flip-coin"
-        >
-          {flipping ? "Flipping..." : balance <= 0 ? "Out of $CHOG" : "Flip Coin"}
-        </motion.button>
+        {/* Primary action button */}
+        {phase !== "result" ? (
+          <motion.button
+            whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
+            whileTap={canFlip ? { scale: 0.97 } : {}}
+            onClick={flip}
+            disabled={!canFlip}
+            className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-yellow-500 to-yellow-700 text-black neon-gold border border-yellow-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            data-testid="button-flip-coin"
+          >
+            {phase === "spinning"
+              ? "Flipping..."
+              : balance <= 0
+              ? "Out of $CHOG"
+              : "Flip Coin"}
+          </motion.button>
+        ) : (
+          <motion.button
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            whileHover={{ scale: 1.03, y: -2 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={reset}
+            className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 transition-all"
+            data-testid="button-flip-again"
+          >
+            Flip Again
+          </motion.button>
+        )}
 
-        {/* Reset balance */}
-        {balance <= 0 && (
+        {balance <= 0 && phase === "idle" && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
