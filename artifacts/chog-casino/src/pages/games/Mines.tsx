@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import bgImage from "@assets/image_1781811958820.png";
+import diamondImg from "@assets/chog_mines_diamond_1781814946879.png";
+import bombImg from "@assets/chog_mines_2_1781814964561.png";
 
 const GRID_SIZE = 25;
 const DEFAULT_MINES = 5;
@@ -142,7 +144,13 @@ export default function Mines() {
                 }`}
                 data-testid={`mines-cell-${i}`}
               >
-                {isRevealed ? (isMine ? "💣" : "💎") : ""}
+                {isRevealed ? (
+                  <img
+                    src={isMine ? bombImg : diamondImg}
+                    alt={isMine ? "bomb" : "diamond"}
+                    className="w-full h-full object-contain p-0.5"
+                  />
+                ) : null}
               </motion.button>
             );
           })}
