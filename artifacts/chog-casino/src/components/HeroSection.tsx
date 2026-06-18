@@ -1,8 +1,10 @@
 import { motion } from "framer-motion";
-import { ChevronDown } from "lucide-react";
+import { useLocation } from "wouter";
 import bgImage from "@assets/chog_casino_homepage_1781811634669.png";
 
 export default function HeroSection() {
+  const [, setLocation] = useLocation();
+
   return (
     <section
       className="relative min-h-screen flex items-center justify-center pt-20"
@@ -24,7 +26,7 @@ export default function HeroSection() {
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.3 }}
-          className="font-cinzel font-black text-5xl sm:text-7xl lg:text-8xl tracking-widest mb-10 leading-none"
+          className="font-cinzel font-black text-5xl sm:text-7xl lg:text-8xl tracking-widest mb-12 leading-none"
           data-testid="hero-title"
         >
           <span className="gradient-purple-gold">CHOG</span>
@@ -36,33 +38,17 @@ export default function HeroSection() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.5 }}
-          className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16"
           data-testid="hero-cta"
         >
           <motion.button
-            whileHover={{ scale: 1.05, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            className="px-10 py-4 rounded-xl font-cinzel font-bold text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple transition-all duration-200 border border-purple-400/40"
+            whileHover={{ scale: 1.08, y: -3 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={() => setLocation("/games")}
+            className="px-16 py-5 rounded-2xl font-cinzel font-black text-base tracking-[0.3em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple transition-all duration-200 border border-purple-400/40"
             data-testid="button-play-now"
           >
-            Play Now
+            PLAY NOW
           </motion.button>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 1, delay: 1.2 }}
-          className="flex items-center justify-center"
-          data-testid="scroll-indicator"
-        >
-          <motion.div
-            animate={{ y: [0, 8, 0] }}
-            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-            className="text-purple-400/50"
-          >
-            <ChevronDown className="w-6 h-6" />
-          </motion.div>
         </motion.div>
       </div>
     </section>

@@ -90,7 +90,7 @@ export default function CoinFlip() {
 
         <div className="space-y-2">
           <label className="text-xs text-purple-300/60 tracking-widest uppercase font-medium">
-            Bet Amount (ETH)
+            Bet Amount ($CHOG)
           </label>
           <input
             type="number"

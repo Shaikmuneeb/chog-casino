@@ -72,7 +72,7 @@ export default function Mines() {
         {gameState === "idle" && (
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-xs text-purple-300/60 tracking-widest uppercase">Bet (ETH)</label>
+              <label className="text-xs text-purple-300/60 tracking-widest uppercase">Bet ($CHOG)</label>
               <input
                 type="number"
                 value={bet}

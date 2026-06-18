@@ -176,7 +176,7 @@ export default function Blackjack() {
 
         {gameState === "idle" && (
           <div className="space-y-2">
-            <label className="text-xs text-purple-300/60 tracking-widest uppercase">Bet (ETH)</label>
+            <label className="text-xs text-purple-300/60 tracking-widest uppercase">Bet ($CHOG)</label>
             <input
               type="number"
               value={bet}

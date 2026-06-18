@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
+import GamesLobby from "@/pages/GamesLobby";
 import CoinFlip from "@/pages/games/CoinFlip";
 import Mines from "@/pages/games/Mines";
 import Roulette from "@/pages/games/Roulette";
@@ -19,6 +20,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/games" component={GamesLobby} />
       <Route path="/games/coin-flip" component={CoinFlip} />
       <Route path="/games/mines" component={Mines} />
       <Route path="/games/roulette" component={Roulette} />
