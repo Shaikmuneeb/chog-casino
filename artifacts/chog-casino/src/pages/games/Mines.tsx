@@ -252,27 +252,16 @@ export default function Mines() {
               {gameState === "idle" ? "Place Bet & Start" : "Play Again"}
             </motion.button>
           ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <motion.button
-                whileHover={{ scale: 1.02, y: -1 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={cashOut}
-                disabled={safeRevealed === 0}
-                className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.15em] uppercase bg-gradient-to-r from-green-600 to-green-800 text-white border border-green-400/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                data-testid="button-cashout"
-              >
-                Cash Out {multiplier}×
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.02, y: -1 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={start}
-                className="py-4 rounded-xl font-cinzel font-bold text-sm tracking-[0.15em] uppercase glass border border-purple-500/40 text-purple-200 hover:border-purple-400/60 transition-all"
-                data-testid="button-restart"
-              >
-                Restart
-              </motion.button>
-            </div>
+            <motion.button
+              whileHover={{ scale: 1.02, y: -1 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={cashOut}
+              disabled={safeRevealed === 0}
+              className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.15em] uppercase bg-gradient-to-r from-green-600 to-green-800 text-white border border-green-400/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              data-testid="button-cashout"
+            >
+              Cash Out {multiplier}×
+            </motion.button>
           )}
         </div>
       </div>
