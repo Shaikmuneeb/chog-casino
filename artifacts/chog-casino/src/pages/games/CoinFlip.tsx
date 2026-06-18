@@ -217,58 +217,6 @@ export default function CoinFlip() {
             </AnimatePresence>
           </div>
 
-          {/* Reaction overlay */}
-          <AnimatePresence>
-            {showReaction && phase === "result" && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.5, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.8 }}
-                transition={{ type: "spring", stiffness: 500, damping: 22 }}
-                className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
-              >
-                {won ? (
-                  <>
-                    <motion.div
-                      animate={{ rotate: [0, -10, 10, -8, 8, 0], scale: [1, 1.15, 1] }}
-                      transition={{ duration: 0.6, delay: 0.1 }}
-                      className="text-6xl mb-1 drop-shadow-2xl"
-                    >
-                      🥳
-                    </motion.div>
-                    <motion.div
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.2 }}
-                      className="font-cinzel font-black text-2xl text-green-300 tracking-widest drop-shadow-lg"
-                      style={{ textShadow: "0 0 20px rgba(74,222,128,0.8)" }}
-                    >
-                      YOU WIN!
-                    </motion.div>
-                  </>
-                ) : (
-                  <>
-                    <motion.div
-                      animate={{ rotate: [0, -5, 5, -3, 0] }}
-                      transition={{ duration: 0.5, delay: 0.1 }}
-                      className="text-6xl mb-1 drop-shadow-2xl"
-                    >
-                      😭
-                    </motion.div>
-                    <motion.div
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.2 }}
-                      className="font-cinzel font-black text-2xl text-red-400 tracking-widest drop-shadow-lg"
-                      style={{ textShadow: "0 0 20px rgba(248,113,113,0.7)" }}
-                    >
-                      YOU LOSE
-                    </motion.div>
-                  </>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
 
         {/* Result pill */}
