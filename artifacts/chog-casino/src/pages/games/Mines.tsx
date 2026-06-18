@@ -5,6 +5,71 @@ import bgImage from "@assets/image_1781811958820.png";
 import diamondImg from "@assets/chog_mines_diamond_1781814946879.png";
 import bombImg from "@assets/chog_mines_2_1781814964561.png";
 
+// ── Audio helpers ─────────────────────────────────────────────────────────────
+function tryPlayUrl(url: string) {
+  try {
+    const audio = new Audio(url);
+    audio.volume = 0.5;
+    audio.play().catch(() => undefined);
+  } catch {
+    // silently ignore
+  }
+}
+
+function webAudioDing() {
+  try {
+    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const freqs = [880, 1108, 1318];
+    freqs.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.07 + 0.3);
+      osc.start(ctx.currentTime + i * 0.07);
+      osc.stop(ctx.currentTime + i * 0.07 + 0.35);
+    });
+  } catch { undefined; }
+}
+
+function webAudioBoom() {
+  try {
+    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    const bufferSize = ctx.sampleRate * 0.8;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2.5);
+    }
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(1.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 200;
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    source.start();
+  } catch { undefined; }
+}
+
+function playSafe() {
+  tryPlayUrl("https://freesound.org/data/previews/66/66930_931655-lq.mp3");
+  webAudioDing();
+}
+
+function playBomb() {
+  tryPlayUrl("https://freesound.org/data/previews/276/276951_5123854-lq.mp3");
+  webAudioBoom();
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const GRID_SIZE = 25;
 
 type CellState = "hidden" | "safe" | "mine";
@@ -57,9 +122,11 @@ export default function Mines() {
       setRevealed(newRevealed);
 
       if (grid[index] === "mine") {
+        playBomb();
         setGameState("dead");
         setRevealed(Array(GRID_SIZE).fill(true));
       } else {
+        playSafe();
         const safe = safeRevealed + 1;
         setSafeRevealed(safe);
         setMultiplier(calcMultiplier(safe, mineCount));
