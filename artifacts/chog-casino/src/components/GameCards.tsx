@@ -103,17 +103,11 @@ function GameCard({ game, index }: { game: Game; index: number }) {
         </div>
 
         <h3
-          className="font-cinzel font-bold text-2xl text-white mb-2 tracking-wide"
+          className="font-cinzel font-bold text-2xl text-white mb-6 tracking-wide"
           data-testid={`game-name-${game.id}`}
         >
           {game.name}
         </h3>
-        <p
-          className="text-sm text-purple-200/60 leading-relaxed mb-6"
-          data-testid={`game-description-${game.id}`}
-        >
-          {game.description}
-        </p>
 
         <div className="flex items-center justify-between">
           <div>
