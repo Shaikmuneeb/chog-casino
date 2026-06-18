@@ -7,7 +7,7 @@ type Side = "heads" | "tails";
 type Result = Side | null;
 
 export default function CoinFlip() {
-  const [bet, setBet] = useState("0.1");
+  const [bet, setBet] = useState("100");
   const [choice, setChoice] = useState<Side>("heads");
   const [flipping, setFlipping] = useState(false);
   const [result, setResult] = useState<Result>(null);
@@ -96,13 +96,13 @@ export default function CoinFlip() {
             type="number"
             value={bet}
             onChange={(e) => setBet(e.target.value)}
-            step="0.01"
-            min="0.01"
+            step="1"
+            min="1"
             className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50 transition-colors"
             data-testid="input-bet-amount"
           />
           <div className="flex gap-2">
-            {["0.05", "0.1", "0.5", "1"].map((v) => (
+            {["500", "1000", "2000", "5000"].map((v) => (
               <button
                 key={v}
                 onClick={() => setBet(v)}

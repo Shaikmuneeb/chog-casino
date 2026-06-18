@@ -41,7 +41,7 @@ const betOptions: { label: string; type: BetType; style: string }[] = [
 ];
 
 export default function Roulette() {
-  const [bet, setBet] = useState("0.1");
+  const [bet, setBet] = useState("100");
   const [betType, setBetType] = useState<BetType>("red");
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState<number | null>(null);
@@ -141,6 +141,8 @@ export default function Roulette() {
             type="number"
             value={bet}
             onChange={(e) => setBet(e.target.value)}
+            step="1"
+            min="1"
             className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50"
             data-testid="input-roulette-bet"
           />

@@ -59,7 +59,7 @@ function CardDisplay({ card, hidden }: { card: Card; hidden?: boolean }) {
 }
 
 export default function Blackjack() {
-  const [bet, setBet] = useState("0.1");
+  const [bet, setBet] = useState("100");
   const [deck, setDeck] = useState<Card[]>([]);
   const [playerCards, setPlayerCards] = useState<Card[]>([]);
   const [dealerCards, setDealerCards] = useState<Card[]>([]);
@@ -181,6 +181,8 @@ export default function Blackjack() {
               type="number"
               value={bet}
               onChange={(e) => setBet(e.target.value)}
+              step="1"
+              min="1"
               className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50"
               data-testid="input-blackjack-bet"
             />

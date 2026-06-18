@@ -19,7 +19,7 @@ function generateGrid(mineCount: number): CellState[] {
 }
 
 export default function Mines() {
-  const [bet, setBet] = useState("0.1");
+  const [bet, setBet] = useState("100");
   const [mineCount, setMineCount] = useState(DEFAULT_MINES);
   const [grid, setGrid] = useState<CellState[]>([]);
   const [revealed, setRevealed] = useState<boolean[]>(Array(GRID_SIZE).fill(false));
