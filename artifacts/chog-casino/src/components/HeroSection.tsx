@@ -22,18 +22,6 @@ export default function HeroSection() {
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <motion.h1
-          initial={{ opacity: 0, y: 40 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.3 }}
-          className="font-cinzel font-black text-5xl sm:text-7xl lg:text-8xl tracking-widest mb-12 leading-none"
-          data-testid="hero-title"
-        >
-          <span className="gradient-purple-gold">CHOG</span>
-          <br />
-          <span className="text-white drop-shadow-2xl">CASINO</span>
-        </motion.h1>
-
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
