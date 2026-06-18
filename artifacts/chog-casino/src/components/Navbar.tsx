@@ -40,14 +40,6 @@ export default function Navbar() {
                 data-testid="logo-mascot-image"
               />
             </div>
-            <div>
-              <span
-                className="font-cinzel font-black text-xl tracking-widest gradient-purple-gold"
-                data-testid="logo-text"
-              >
-                CHOG CASINO
-              </span>
-            </div>
           </motion.div>
 
           <div data-testid="connect-wallet-button">
