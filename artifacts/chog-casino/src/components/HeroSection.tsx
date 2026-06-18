@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Sparkles, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import bgImage from "@assets/chog_casino_homepage_1781811634669.png";
 
 export default function HeroSection() {
@@ -20,20 +20,6 @@ export default function HeroSection() {
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        <motion.div
-          initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass border border-yellow-400/30 mb-8"
-          data-testid="hero-badge"
-        >
-          <Sparkles className="w-4 h-4 text-yellow-400" />
-          <span className="text-xs font-medium text-yellow-300 tracking-widest uppercase">
-            Premium Crypto Casino
-          </span>
-          <Sparkles className="w-4 h-4 text-yellow-400" />
-        </motion.div>
-
         <motion.h1
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
