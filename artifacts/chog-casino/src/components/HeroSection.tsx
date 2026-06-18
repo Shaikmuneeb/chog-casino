@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { Sparkles, ChevronDown } from "lucide-react";
+import bgImage from "@assets/chog_casino_homepage_1781811634669.png";
 
 export default function HeroSection() {
   return (
@@ -7,11 +8,15 @@ export default function HeroSection() {
       className="relative min-h-screen flex items-center justify-center pt-20"
       data-testid="hero-section"
     >
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-purple-600/10 blur-[100px]" />
-        <div className="absolute top-1/3 left-1/4 w-[400px] h-[400px] rounded-full bg-purple-800/15 blur-[80px]" />
-        <div className="absolute bottom-1/4 right-1/4 w-[300px] h-[300px] rounded-full bg-yellow-500/8 blur-[80px]" />
-        <div className="absolute top-1/2 right-1/3 w-[200px] h-[200px] rounded-full bg-fuchsia-600/10 blur-[60px]" />
+      <div className="absolute inset-0 overflow-hidden">
+        <img
+          src={bgImage}
+          alt="Chog Casino"
+          className="w-full h-full object-cover object-center"
+          data-testid="hero-bg-image"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/50 to-[hsl(270,40%,4%)]" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[hsl(270,40%,4%)] via-transparent to-transparent" />
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
@@ -29,21 +34,11 @@ export default function HeroSection() {
           <Sparkles className="w-4 h-4 text-yellow-400" />
         </motion.div>
 
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.8, delay: 0.3 }}
-          data-testid="hero-mascot"
-          className="w-48 h-48 sm:w-64 sm:h-64 mx-auto mb-8 rounded-full glass border-2 border-purple-500/40 neon-purple overflow-hidden flex items-center justify-center"
-        >
-          <div className="text-8xl sm:text-9xl select-none">🐸</div>
-        </motion.div>
-
         <motion.h1
           initial={{ opacity: 0, y: 40 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.4 }}
-          className="font-cinzel font-black text-5xl sm:text-7xl lg:text-8xl tracking-widest mb-6 leading-none"
+          transition={{ duration: 0.8, delay: 0.3 }}
+          className="font-cinzel font-black text-5xl sm:text-7xl lg:text-8xl tracking-widest mb-10 leading-none"
           data-testid="hero-title"
         >
           <span className="gradient-purple-gold">CHOG</span>
@@ -51,23 +46,10 @@ export default function HeroSection() {
           <span className="text-white drop-shadow-2xl">CASINO</span>
         </motion.h1>
 
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.6 }}
-          className="text-lg sm:text-xl text-purple-200/70 max-w-2xl mx-auto mb-10 leading-relaxed tracking-wide"
-          data-testid="hero-tagline"
-        >
-          Where fortune meets the blockchain. The most exclusive crypto gaming
-          experience, built for{" "}
-          <span className="text-yellow-400 font-semibold">true degens</span> who
-          play to win.
-        </motion.p>
-
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.7 }}
+          transition={{ duration: 0.6, delay: 0.5 }}
           className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16"
           data-testid="hero-cta"
         >

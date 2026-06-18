@@ -7,7 +7,7 @@ import ParticlesBg from "@/components/ParticlesBg";
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-casino relative overflow-hidden">
+    <div className="min-h-screen relative overflow-hidden" style={{ backgroundColor: "hsl(270,40%,4%)" }}>
       <ParticlesBg />
       <div className="relative z-10">
         <Navbar />

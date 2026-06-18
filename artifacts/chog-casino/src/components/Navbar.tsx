@@ -1,7 +1,7 @@
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { motion } from "framer-motion";
-import { Gem } from "lucide-react";
 import { useState, useEffect } from "react";
+import bgImage from "@assets/chog_casino_homepage_1781811634669.png";
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
@@ -20,7 +20,7 @@ export default function Navbar() {
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
         scrolled
           ? "glass border-b border-purple-500/20 shadow-lg"
-          : "bg-transparent"
+          : "bg-gradient-to-b from-black/40 to-transparent"
       }`}
       data-testid="navbar"
     >
@@ -31,11 +31,14 @@ export default function Navbar() {
             whileHover={{ scale: 1.02 }}
             data-testid="logo"
           >
-            <div className="relative">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-purple-800 flex items-center justify-center neon-purple">
-                <Gem className="w-5 h-5 text-yellow-300" />
-              </div>
-              <div className="absolute -inset-1 rounded-xl bg-purple-500/20 blur-sm -z-10" />
+            <div className="relative w-11 h-11 rounded-full overflow-hidden border-2 border-purple-400/50 neon-purple shrink-0">
+              <img
+                src={bgImage}
+                alt="Chog Mascot"
+                className="w-full h-full object-cover"
+                style={{ objectPosition: "50% 52%" }}
+                data-testid="logo-mascot-image"
+              />
             </div>
             <div>
               <span
@@ -49,20 +52,6 @@ export default function Navbar() {
               </div>
             </div>
           </motion.div>
-
-          <div className="hidden md:flex items-center gap-8">
-            {["Games", "Leaderboard", "Rewards", "About"].map((item) => (
-              <motion.a
-                key={item}
-                href="#"
-                className="text-sm font-medium text-purple-200/70 hover:text-yellow-300 tracking-wider transition-colors duration-200"
-                whileHover={{ y: -1 }}
-                data-testid={`nav-link-${item.toLowerCase()}`}
-              >
-                {item}
-              </motion.a>
-            ))}
-          </div>
 
           <div data-testid="connect-wallet-button">
             <ConnectButton
