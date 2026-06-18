@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
+import { useLocation } from "wouter";
 
 interface Game {
   id: string;
@@ -68,6 +69,7 @@ const games: Game[] = [
 
 function GameCard({ game, index }: { game: Game; index: number }) {
   const [hovered, setHovered] = useState(false);
+  const [, setLocation] = useLocation();
 
   return (
     <motion.div
@@ -129,6 +131,7 @@ function GameCard({ game, index }: { game: Game; index: number }) {
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.97 }}
+            onClick={() => setLocation(`/games/${game.id}`)}
             className="px-6 py-3 rounded-xl font-cinzel font-bold text-xs tracking-[0.15em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white border border-purple-400/30 hover:border-purple-400/60 transition-all duration-200 neon-purple"
             data-testid={`button-play-${game.id}`}
           >

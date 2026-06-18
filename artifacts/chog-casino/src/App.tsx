@@ -6,6 +6,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
+import CoinFlip from "@/pages/games/CoinFlip";
+import Mines from "@/pages/games/Mines";
+import Roulette from "@/pages/games/Roulette";
+import Blackjack from "@/pages/games/Blackjack";
 import { wagmiConfig } from "@/lib/wagmi";
 import "@rainbow-me/rainbowkit/styles.css";
 
@@ -15,6 +19,10 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/games/coin-flip" component={CoinFlip} />
+      <Route path="/games/mines" component={Mines} />
+      <Route path="/games/roulette" component={Roulette} />
+      <Route path="/games/blackjack" component={Blackjack} />
       <Route component={NotFound} />
     </Switch>
   );
