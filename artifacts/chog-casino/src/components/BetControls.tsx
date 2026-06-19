@@ -8,7 +8,6 @@ interface BetControlsProps {
   step?: number;
 }
 
-const QUICK = [50, 100, 250, 500];
 
 export default function BetControls({ value, onChange, max, disabled = false, step = 50 }: BetControlsProps) {
   const set = (n: number) => onChange(Math.max(1, Math.min(max, Math.round(n))));
@@ -71,32 +70,6 @@ export default function BetControls({ value, onChange, max, disabled = false, st
         </motion.button>
       </div>
 
-      {/* Quick bet chips */}
-      <div className="flex gap-1.5">
-        {QUICK.map((v) => (
-          <motion.button
-            key={v}
-            whileTap={!disabled ? { scale: 0.9 } : {}}
-            onClick={() => set(v)}
-            disabled={disabled}
-            className={`flex-1 py-1.5 rounded-lg text-[11px] font-cinzel font-bold border transition-all ${
-              value === v
-                ? "bg-yellow-500/20 border-yellow-400/50 text-yellow-300"
-                : "glass border-purple-700/30 text-purple-300 hover:border-purple-400/40 hover:text-purple-100"
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
-          >
-            {v}
-          </motion.button>
-        ))}
-        <motion.button
-          whileTap={!disabled ? { scale: 0.9 } : {}}
-          onClick={() => set(max)}
-          disabled={disabled}
-          className="flex-1 py-1.5 rounded-lg text-[11px] font-cinzel font-bold glass border border-yellow-700/30 text-yellow-400/80 hover:border-yellow-500/50 hover:text-yellow-300 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          MAX
-        </motion.button>
-      </div>
     </div>
   );
 }
