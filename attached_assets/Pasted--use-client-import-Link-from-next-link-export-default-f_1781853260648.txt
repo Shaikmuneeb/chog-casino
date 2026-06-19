@@ -1,0 +1,60 @@
+'use client';
+
+import Link from 'next/link';
+
+export default function Home() {
+  return (
+    <div className="relative min-h-screen overflow-hidden">
+      {/* Background */}
+      <div 
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat z-0"
+        style={{
+          backgroundImage: "url('/assets/chog-casino-homepage.png')",
+          filter: "brightness(0.65) contrast(1.15)",
+        }}
+      />
+      <div className="absolute inset-0 bg-black/50 z-10" />
+
+      {/* Navbar */}
+      <nav className="relative z-50 glass border-b border-white/10 py-5">
+        <div className="max-w-7xl mx-auto px-8 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="text-4xl">🦔</div>
+            <h1 className="text-4xl font-bold tracking-tighter">CHOG CASINO</h1>
+          </div>
+          {/* Wallet button stays here */}
+          <div>Your Wallet Button</div>
+        </div>
+      </nav>
+
+      {/* Games Lobby */}
+      <div className="relative z-20 flex flex-col items-center justify-center min-h-[calc(100vh-85px)] px-6">
+        <h2 className="text-5xl md:text-6xl font-bold mb-4 text-center">
+          CHOOSE YOUR GAME
+        </h2>
+        <p className="text-purple-200 mb-12 text-center">Play with $CHOG • Provably Fair</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl w-full">
+          {[
+            { name: "Coin Flip", path: "/games/coin-flip", emoji: "🪙" },
+            { name: "Mines", path: "/games/mines", emoji: "💣" },
+            { name: "Roulette", path: "/games/roulette", emoji: "🎰" },
+            { name: "Blackjack", path: "/games/blackjack", emoji: "🃏" },
+          ].map((game) => (
+            <Link 
+              key={game.name}
+              href={game.path}
+              className="glass hover:scale-105 transition-all duration-300 rounded-3xl p-8 text-center group"
+            >
+              <div className="text-6xl mb-6 group-hover:scale-110 transition-transform">
+                {game.emoji}
+              </div>
+              <h3 className="text-2xl font-bold mb-2">{game.name}</h3>
+              <p className="text-purple-300">Play Now →</p>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
