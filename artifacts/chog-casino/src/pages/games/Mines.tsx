@@ -108,8 +108,8 @@ export default function Mines() {
   const [multiplier, setMultiplier] = useState(1);
   const [safeRevealed, setSafeRevealed] = useState(0);
 
-  const { balance, updateBalance, resetBalance, needsWallet, currencyLabel } = useGameBalance();
-  const canStart = !needsWallet && bet > 0 && bet <= balance;
+  const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
+  const canStart = !gated && bet > 0 && bet <= balance;
 
   const start = () => {
     if (!canStart) return;
@@ -259,19 +259,21 @@ export default function Mines() {
         <div className="px-4 sm:px-5 pb-5 space-y-3 border-t border-purple-500/10 pt-4">
 
           {/* Balance row */}
-          <div className="flex items-center justify-between px-1">
-            <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Balance</div>
-            <div className="font-cinzel font-bold text-lg text-yellow-300">
-              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
+          {showBalance && (
+            <div className="flex items-center justify-between px-1">
+              <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Balance</div>
+              <div className="font-cinzel font-bold text-lg text-yellow-300">
+                {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Real mode requires a wallet */}
-          {needsWallet && (gameState === "idle" || isOver) && <WalletGateNotice />}
+          {/* Real mode: connect wallet / deposit gate */}
+          {gated && (gameState === "idle" || isOver) && <WalletGateNotice reason={gateReason} />}
 
           {/* Bet + Mines row — only when idle or after game */}
           <AnimatePresence>
-            {(gameState === "idle" || isOver) && !needsWallet && (
+            {(gameState === "idle" || isOver) && !gated && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -307,7 +309,7 @@ export default function Mines() {
 
 
           {/* Action buttons */}
-          {(gameState === "idle" || isOver) && needsWallet ? null : gameState === "idle" || isOver ? (
+          {(gameState === "idle" || isOver) && gated ? null : gameState === "idle" || isOver ? (
             <>
               <motion.button
                 whileHover={canStart ? { scale: 1.02, y: -1 } : {}}

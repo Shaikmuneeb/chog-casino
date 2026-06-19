@@ -5,9 +5,11 @@ import { useGameMode } from "@/context/GameModeContext";
 const FUN_KEY = "chog_fun_balance";
 const REAL_KEY = "chog_real_balance";
 const FUN_DEFAULT = 10_000;
-// Placeholder starting balance for "real" mode. There is no $CHOG token contract or
-// on-chain settlement wired into this project yet, so this stands in until one exists.
-const REAL_DEFAULT = 1_000;
+// Real mode starts empty — players must deposit before they have a balance.
+// (On-chain deposits aren't wired up yet, so this stays 0 until that exists.)
+const REAL_DEFAULT = 0;
+
+export type GateReason = "wallet" | "deposit" | null;
 
 const BALANCE_CHANGED_EVENT = "chog-balance-changed";
 
@@ -21,6 +23,13 @@ function readBalance(key: string, fallback: number): number {
 function writeBalance(key: string, value: number): void {
   localStorage.setItem(key, String(value));
   window.dispatchEvent(new Event(BALANCE_CHANGED_EVENT));
+}
+
+// One-time cleanup: earlier builds seeded a fake 1,000 "real" balance. Clear it once
+// so real mode correctly starts empty (deposit-gated). Safe — it was never real money.
+if (typeof localStorage !== "undefined" && !localStorage.getItem("chog_real_reset_v1")) {
+  localStorage.removeItem(REAL_KEY);
+  localStorage.setItem("chog_real_reset_v1", "1");
 }
 
 /**
@@ -65,8 +74,14 @@ export function useGameBalance() {
 
   const resetBalance = useCallback(() => writeBalance(key, def), [key, def]);
 
-  // In real mode you must connect a wallet before betting.
+  // Real mode is gated: first connect a wallet, then deposit before you can play.
   const needsWallet = mode === "real" && !isConnected;
+  const needsDeposit = mode === "real" && isConnected && balance <= 0;
+  const gated = needsWallet || needsDeposit;
+  const gateReason: GateReason = needsWallet ? "wallet" : needsDeposit ? "deposit" : null;
+
+  // Hide the balance in real mode until there's an actual (deposited) balance.
+  const showBalance = mode === "fun" || balance > 0;
 
   return {
     mode,
@@ -74,6 +89,10 @@ export function useGameBalance() {
     updateBalance,
     resetBalance,
     needsWallet,
+    needsDeposit,
+    gated,
+    gateReason,
+    showBalance,
     defaultBalance: def,
     currencyLabel: mode === "real" ? "$CHOG" : "FUN",
   };

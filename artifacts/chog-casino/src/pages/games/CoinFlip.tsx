@@ -77,12 +77,12 @@ export default function CoinFlip() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Side | null>(null);
   const [won, setWon] = useState<boolean | null>(null);
-  const { balance, updateBalance, resetBalance, needsWallet, currencyLabel } = useGameBalance();
+  const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
   // which image to show — starts as heads, swaps to result image just before last flip ends
   const [displaySide, setDisplaySide] = useState<Side>("heads");
 
   const betAmount = bet;
-  const canFlip = phase === "idle" && !needsWallet && betAmount > 0 && betAmount <= balance;
+  const canFlip = phase === "idle" && !gated && betAmount > 0 && betAmount <= balance;
 
   const flip = useCallback(() => {
     if (!canFlip) return;
@@ -131,17 +131,19 @@ export default function CoinFlip() {
 
         {/* Balance row */}
         <div className="flex items-center justify-between px-1">
-          <div>
-            <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">Balance</div>
-            <motion.div
-              key={balance}
-              initial={{ scale: 1.15 }}
-              animate={{ scale: 1 }}
-              className="font-cinzel font-bold text-xl text-yellow-300"
-            >
-              {balance.toLocaleString()} <span className="text-sm text-yellow-400/60">{currencyLabel}</span>
-            </motion.div>
-          </div>
+          {showBalance ? (
+            <div>
+              <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">Balance</div>
+              <motion.div
+                key={balance}
+                initial={{ scale: 1.15 }}
+                animate={{ scale: 1 }}
+                className="font-cinzel font-bold text-xl text-yellow-300"
+              >
+                {balance.toLocaleString()} <span className="text-sm text-yellow-400/60">{currencyLabel}</span>
+              </motion.div>
+            </div>
+          ) : <div />}
           <AnimatePresence mode="wait">
             {won !== null && phase === "result" && (
               <motion.div
@@ -285,11 +287,11 @@ export default function CoinFlip() {
         {/* Bet controls */}
         <BetControls value={bet} onChange={setBet} max={balance} disabled={phase !== "idle"} />
 
-        {/* Real mode requires a wallet */}
-        {needsWallet && <WalletGateNotice />}
+        {/* Real mode: connect wallet / deposit gate */}
+        {gated && <WalletGateNotice reason={gateReason} />}
 
         {/* Primary action */}
-        {needsWallet ? null : phase !== "result" ? (
+        {gated ? null : phase !== "result" ? (
           <motion.button
             whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
             whileTap={canFlip ? { scale: 0.97 } : {}}
@@ -314,7 +316,7 @@ export default function CoinFlip() {
           </motion.button>
         )}
 
-        {balance <= 0 && phase === "idle" && !needsWallet && (
+        {balance <= 0 && phase === "idle" && !gated && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

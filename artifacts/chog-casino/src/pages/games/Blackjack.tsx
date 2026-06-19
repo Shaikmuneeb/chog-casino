@@ -77,7 +77,7 @@ function ScoreChip({ value, bust }: { value: number; bust?: boolean }) {
 export default function Blackjack() {
   const [betInput, setBetInput] = useState(100);
   const [activeBet, setActiveBet] = useState(0);
-  const { balance, updateBalance, needsWallet, currencyLabel } = useGameBalance();
+  const { balance, updateBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
   const [deck, setDeck] = useState<Card[]>([]);
   const [playerCards, setPlayerCards] = useState<Card[]>([]);
   const [dealerCards, setDealerCards] = useState<Card[]>([]);
@@ -85,7 +85,7 @@ export default function Blackjack() {
   const [outcome, setOutcome] = useState<"win"|"push"|"lose"|"bust"|"">("");
 
   const betAmount = betInput;
-  const canDeal = gameState === "betting" && !needsWallet && betAmount > 0 && betAmount <= balance;
+  const canDeal = gameState === "betting" && !gated && betAmount > 0 && betAmount <= balance;
   const playerVal = handValue(playerCards);
   const dealerVal = handValue(dealerCards);
   const showDealerFull = gameState === "done";
@@ -149,7 +149,7 @@ export default function Blackjack() {
           <div>
             <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
             <div className="font-cinzel font-bold text-lg text-yellow-300">
-              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
+              {showBalance ? <>{balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span></> : <span className="text-purple-300/40">—</span>}
             </div>
           </div>
           <AnimatePresence>
@@ -240,18 +240,18 @@ export default function Blackjack() {
         <div className="border-t border-purple-500/15 bg-black/20 px-5 py-4">
           <AnimatePresence mode="wait">
 
-            {/* BETTING state — wallet gate (real mode) or bet selector + Deal */}
-            {gameState === "betting" && needsWallet && (
+            {/* BETTING state — real-mode gate (connect/deposit) or bet selector + Deal */}
+            {gameState === "betting" && gated && (
               <motion.div
-                key="betting-wallet-gate"
+                key="betting-gate"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
               >
-                <WalletGateNotice />
+                <WalletGateNotice reason={gateReason} />
               </motion.div>
             )}
-            {gameState === "betting" && !needsWallet && (
+            {gameState === "betting" && !gated && (
               <motion.div
                 key="betting-controls"
                 initial={{ opacity: 0, y: 8 }}

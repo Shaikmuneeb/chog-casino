@@ -69,14 +69,14 @@ function betLabel(b: BetType): string {
 export default function Roulette() {
   const [bet, setBet] = useState(100);
   const [betType, setBetType] = useState<BetType>("red");
-  const { balance, updateBalance, resetBalance, needsWallet, currencyLabel } = useGameBalance();
+  const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState<number | null>(null);
   const [winAmount, setWinAmount] = useState<number | null>(null);
   const [rotation, setRotation] = useState(0);
   const [showNumbers, setShowNumbers] = useState(false);
 
-  const canSpin = !spinning && !needsWallet && bet > 0 && bet <= balance;
+  const canSpin = !spinning && !gated && bet > 0 && bet <= balance;
 
   const spin = () => {
     if (!canSpin) return;
@@ -115,12 +115,14 @@ export default function Roulette() {
 
         {/* Balance bar */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-purple-500/15">
-          <div>
-            <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
-            <div className="font-cinzel font-bold text-lg text-yellow-300">
-              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
+          {showBalance ? (
+            <div>
+              <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
+              <div className="font-cinzel font-bold text-lg text-yellow-300">
+                {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
+              </div>
             </div>
-          </div>
+          ) : <div />}
           <AnimatePresence>
             {winAmount !== null && !spinning && (
               <motion.div
@@ -306,11 +308,11 @@ export default function Roulette() {
           {/* Bet amount */}
           <BetControls value={bet} onChange={setBet} max={balance} disabled={spinning} />
 
-          {/* Real mode requires a wallet */}
-          {needsWallet && <WalletGateNotice />}
+          {/* Real mode: connect wallet / deposit gate */}
+          {gated && <WalletGateNotice reason={gateReason} />}
 
           {/* Spin */}
-          {!needsWallet && (
+          {!gated && (
             <motion.button
               whileHover={canSpin ? { scale: 1.03, y: -2 } : {}}
               whileTap={canSpin ? { scale: 0.97 } : {}}
@@ -324,7 +326,7 @@ export default function Roulette() {
           )}
 
           {/* Reset */}
-          {balance <= 0 && !spinning && !needsWallet && (
+          {balance <= 0 && !spinning && !gated && (
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
