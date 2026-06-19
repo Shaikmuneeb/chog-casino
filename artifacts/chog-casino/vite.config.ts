@@ -45,6 +45,18 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        // Split heavy wallet/web3 libs out of the main chunk to keep memory
+        // and individual chunk sizes down during the build.
+        manualChunks: {
+          web3: ["wagmi", "viem", "@rainbow-me/rainbowkit"],
+          react: ["react", "react-dom"],
+          motion: ["framer-motion"],
+        },
+      },
+    },
   },
   server: {
     port,
