@@ -47,6 +47,17 @@ export default defineConfig({
     emptyOutDir: true,
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
+      // Silence the harmless "use client" directive / sourcemap warnings from
+      // the shadcn UI components — they are no-ops in a Vite SPA and only add noise.
+      onwarn(warning, defaultHandler) {
+        if (
+          warning.code === "MODULE_LEVEL_DIRECTIVE" ||
+          warning.code === "SOURCEMAP_ERROR"
+        ) {
+          return;
+        }
+        defaultHandler(warning);
+      },
       output: {
         // Split heavy wallet/web3 libs out of the main chunk to keep memory
         // and individual chunk sizes down during the build.
