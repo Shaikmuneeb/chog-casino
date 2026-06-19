@@ -158,10 +158,10 @@ export default function CoinFlip() {
           </AnimatePresence>
         </div>
 
-        {/* Coin + Reaction */}
-        <div className="flex justify-center py-2 relative" style={{ minHeight: 220 }}>
+        {/* Coin + label */}
+        <div className="flex flex-col items-center gap-4 py-2">
           {/* 3D coin */}
-          <div style={{ perspective: "700px" }}>
+          <div style={{ perspective: "700px", position: "relative" }}>
             <motion.div
               animate={{
                 rotateY: coinRotation,
@@ -210,35 +210,50 @@ export default function CoinFlip() {
                   animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.15, 1] }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.8, repeat: Infinity }}
-                  className="absolute inset-0 rounded-full pointer-events-none"
-                  style={{ boxShadow: "0 0 60px 20px rgba(212,175,55,0.35)", borderRadius: "50%" }}
+                  style={{
+                    position: "absolute", inset: 0,
+                    boxShadow: "0 0 60px 20px rgba(212,175,55,0.35)",
+                    borderRadius: "50%",
+                    pointerEvents: "none",
+                  }}
                 />
               )}
             </AnimatePresence>
           </div>
 
+          {/* Result label below coin */}
+          <div style={{ minHeight: 40 }}>
+            <AnimatePresence mode="wait">
+              {phase === "result" && result && (
+                <motion.div
+                  key={result}
+                  initial={{ opacity: 0, y: 8, scale: 0.9 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ type: "spring", stiffness: 400, damping: 22, delay: 0.1 }}
+                  className="text-center"
+                  data-testid="flip-result"
+                >
+                  <span
+                    className={`font-cinzel font-black text-2xl tracking-[0.3em] uppercase ${
+                      result === "heads" ? "text-yellow-300" : "text-purple-300"
+                    }`}
+                    style={{
+                      textShadow: result === "heads"
+                        ? "0 0 20px rgba(212,175,55,0.8)"
+                        : "0 0 20px rgba(160,80,255,0.8)",
+                    }}
+                  >
+                    {result === "heads" ? "HEADS" : "TAILS"}
+                  </span>
+                  <div className={`text-xs font-cinzel tracking-widest mt-1 ${won ? "text-green-400" : "text-red-400"}`}>
+                    {won ? `+${betAmount.toLocaleString()} $CHOG` : `-${betAmount.toLocaleString()} $CHOG`}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
-
-        {/* Result pill */}
-        <AnimatePresence mode="wait">
-          {phase === "result" && result && (
-            <motion.div
-              key={result + String(won)}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.25, delay: 0.15 }}
-              className={`text-center py-2.5 rounded-xl font-cinzel font-bold text-sm tracking-[0.2em] uppercase border ${
-                won
-                  ? "bg-green-500/15 border-green-400/30 text-green-300"
-                  : "bg-red-500/15 border-red-400/30 text-red-300"
-              }`}
-              data-testid="flip-result"
-            >
-              Landed on {result.toUpperCase()} · {won ? `+${betAmount.toLocaleString()}` : `-${betAmount.toLocaleString()}`} $CHOG
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* Side selector */}
         <div className="grid grid-cols-2 gap-3">
