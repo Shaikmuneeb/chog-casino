@@ -2,13 +2,31 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
+import WalletGateNotice from "@/components/WalletGateNotice";
+import { useGameBalance } from "@/hooks/useGameBalance";
 import bgImage from "@assets/image_1781811963908.png";
 
 type BetType = "red" | "black" | "green" | "odd" | "even" | "1-18" | "19-36" | number;
 
 const RED_NUMBERS = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
 const NUMBERS = Array.from({ length: 37 }, (_, i) => i);
-const STARTING_BALANCE = 10_000;
+
+// Physical positions of numbers around a European roulette wheel (clockwise from top).
+const WHEEL_ORDER = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
+const SLOT_ANGLE = 360 / WHEEL_ORDER.length;
+
+function polar(cx: number, cy: number, r: number, angleDeg: number): [number, number] {
+  const rad = (angleDeg * Math.PI) / 180;
+  return [cx + r * Math.sin(rad), cy - r * Math.cos(rad)];
+}
+
+function segmentPath(cx: number, cy: number, innerR: number, outerR: number, startAngle: number, endAngle: number) {
+  const [x1, y1] = polar(cx, cy, outerR, startAngle);
+  const [x2, y2] = polar(cx, cy, outerR, endAngle);
+  const [x3, y3] = polar(cx, cy, innerR, endAngle);
+  const [x4, y4] = polar(cx, cy, innerR, startAngle);
+  return `M ${x1} ${y1} A ${outerR} ${outerR} 0 0 1 ${x2} ${y2} L ${x3} ${y3} A ${innerR} ${innerR} 0 0 0 ${x4} ${y4} Z`;
+}
 
 function getColor(n: number): "red" | "black" | "green" {
   if (n === 0) return "green";
@@ -51,31 +69,39 @@ function betLabel(b: BetType): string {
 export default function Roulette() {
   const [bet, setBet] = useState(100);
   const [betType, setBetType] = useState<BetType>("red");
-  const [balance, setBalance] = useState(STARTING_BALANCE);
+  const { balance, updateBalance, resetBalance, needsWallet, currencyLabel } = useGameBalance();
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState<number | null>(null);
   const [winAmount, setWinAmount] = useState<number | null>(null);
   const [rotation, setRotation] = useState(0);
   const [showNumbers, setShowNumbers] = useState(false);
 
-  const canSpin = !spinning && bet > 0 && bet <= balance;
+  const canSpin = !spinning && !needsWallet && bet > 0 && bet <= balance;
 
   const spin = () => {
     if (!canSpin) return;
     setSpinning(true);
     setResult(null);
     setWinAmount(null);
-    setBalance(b => b - bet);
+    updateBalance(b => b - bet);
 
     const outcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
-    setRotation(r => r + 1440 + Math.floor(Math.random() * 360));
+    const slotIndex = WHEEL_ORDER.indexOf(outcome);
+    setRotation(prev => {
+      const prevMod = ((prev % 360) + 360) % 360;
+      const targetMod = slotIndex * SLOT_ANGLE;
+      let delta = targetMod - prevMod;
+      if (delta <= 0) delta += 360;
+      const fullSpins = 5 + Math.floor(Math.random() * 2);
+      return prev + fullSpins * 360 + delta;
+    });
 
     setTimeout(() => {
       const won = checkWin(outcome, betType);
       const payout = won ? bet * getMultiplier(betType) : 0;
       setResult(outcome);
       setWinAmount(won ? payout : -bet);
-      if (won) setBalance(b => b + payout);
+      if (won) updateBalance(b => b + payout);
       setSpinning(false);
     }, 2300);
   };
@@ -92,7 +118,7 @@ export default function Roulette() {
           <div>
             <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
             <div className="font-cinzel font-bold text-lg text-yellow-300">
-              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">$CHOG</span>
+              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
             </div>
           </div>
           <AnimatePresence>
@@ -114,17 +140,62 @@ export default function Roulette() {
         <div className="p-5 sm:p-6 space-y-5">
           {/* Wheel */}
           <div className="flex justify-center">
-            <div className="relative">
-              <motion.div
+            <div className="relative w-[260px] h-[260px] sm:w-[320px] sm:h-[320px]">
+              {/* Fixed pointer */}
+              <div
+                className="absolute left-1/2 -top-1 -translate-x-1/2 z-10 w-0 h-0
+                  border-l-[8px] border-l-transparent border-r-[8px] border-r-transparent
+                  border-t-[14px] border-t-yellow-400 drop-shadow-[0_0_4px_rgba(250,204,21,0.8)]"
+                data-testid="roulette-pointer"
+              />
+              <motion.svg
+                viewBox="0 0 380 380"
                 animate={{ rotate: rotation }}
                 transition={{ duration: 2.3, ease: [0.25, 0.1, 0.25, 1] }}
-                className="w-32 h-32 rounded-full border-4 border-yellow-400/60 neon-gold flex items-center justify-center text-4xl"
-                style={{ background: "conic-gradient(from 0deg, #7c3aed, #b45309, #7c3aed, #b45309, #7c3aed, #b45309, #7c3aed, #16a34a, #7c3aed)" }}
+                className="w-full h-full drop-shadow-2xl"
                 data-testid="roulette-wheel"
               >
-                🎡
-              </motion.div>
-              {spinning && <div className="absolute inset-0 rounded-full bg-yellow-400/10 blur-xl animate-pulse" />}
+                <circle cx={190} cy={190} r={188} fill="#0a0618" stroke="#1f1635" strokeWidth={2} />
+                {WHEEL_ORDER.map((n, i) => {
+                  const start = i * SLOT_ANGLE - SLOT_ANGLE / 2;
+                  const end = i * SLOT_ANGLE + SLOT_ANGLE / 2;
+                  const color = getColor(n);
+                  const fill = color === "red" ? "#b91c1c" : color === "black" ? "#18181b" : "#15803d";
+                  const [tx, ty] = polar(190, 190, 158, i * SLOT_ANGLE);
+                  return (
+                    <g key={n}>
+                      <path d={segmentPath(190, 190, 120, 178, start, end)} fill={fill} stroke="#0a0618" strokeWidth={1.5} />
+                      <text
+                        x={tx}
+                        y={ty}
+                        fill="#f5f5f5"
+                        fontSize={13}
+                        fontWeight={700}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        transform={`rotate(${i * SLOT_ANGLE}, ${tx}, ${ty})`}
+                      >
+                        {n}
+                      </text>
+                    </g>
+                  );
+                })}
+                {/* Inner hub */}
+                <circle cx={190} cy={190} r={118} fill="#0a0618" stroke="#b45309" strokeWidth={3} />
+                <circle cx={190} cy={190} r={64} fill="#120a24" stroke="#facc15" strokeWidth={2} />
+                {/* Gold cross with ball tips */}
+                {[45, 135, 225, 315].map(angle => {
+                  const [ex, ey] = polar(190, 190, 46, angle);
+                  return (
+                    <g key={angle}>
+                      <line x1={190} y1={190} x2={ex} y2={ey} stroke="#facc15" strokeWidth={4} strokeLinecap="round" />
+                      <circle cx={ex} cy={ey} r={7} fill="#facc15" />
+                    </g>
+                  );
+                })}
+                <circle cx={190} cy={190} r={9} fill="#facc15" />
+              </motion.svg>
+              {spinning && <div className="absolute inset-0 rounded-full bg-yellow-400/10 blur-xl animate-pulse pointer-events-none" />}
             </div>
           </div>
 
@@ -235,27 +306,32 @@ export default function Roulette() {
           {/* Bet amount */}
           <BetControls value={bet} onChange={setBet} max={balance} disabled={spinning} />
 
+          {/* Real mode requires a wallet */}
+          {needsWallet && <WalletGateNotice />}
+
           {/* Spin */}
-          <motion.button
-            whileHover={canSpin ? { scale: 1.03, y: -2 } : {}}
-            whileTap={canSpin ? { scale: 0.97 } : {}}
-            onClick={spin}
-            disabled={!canSpin}
-            className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.22em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            data-testid="button-spin"
-          >
-            {spinning ? "Spinning…" : `Spin — ${betLabel(betType)}`}
-          </motion.button>
+          {!needsWallet && (
+            <motion.button
+              whileHover={canSpin ? { scale: 1.03, y: -2 } : {}}
+              whileTap={canSpin ? { scale: 0.97 } : {}}
+              onClick={spin}
+              disabled={!canSpin}
+              className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.22em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              data-testid="button-spin"
+            >
+              {spinning ? "Spinning…" : `Spin — ${betLabel(betType)}`}
+            </motion.button>
+          )}
 
           {/* Reset */}
-          {balance <= 0 && !spinning && (
+          {balance <= 0 && !spinning && !needsWallet && (
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              onClick={() => { setBalance(STARTING_BALANCE); setResult(null); setWinAmount(null); }}
+              onClick={() => { resetBalance(); setResult(null); setWinAmount(null); }}
               className="w-full py-3 rounded-xl font-cinzel font-bold text-sm tracking-widest uppercase glass border border-purple-500/40 text-purple-300"
             >
-              Reset Balance (10,000 $CHOG)
+              Reset Balance
             </motion.button>
           )}
         </div>

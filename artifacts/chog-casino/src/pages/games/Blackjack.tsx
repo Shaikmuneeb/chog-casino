@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
+import WalletGateNotice from "@/components/WalletGateNotice";
+import { useGameBalance } from "@/hooks/useGameBalance";
 import bgImage from "@assets/image_1781811969584.png";
 
 type Card = { value: string; suit: string; numeric: number };
@@ -9,7 +11,6 @@ type GameState = "betting" | "playing" | "done";
 
 const SUITS = ["♠", "♥", "♦", "♣"];
 const VALUES = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
-const STARTING_BALANCE = 10_000;
 
 function makeCard(v: string, s: string): Card {
   const n = ["J","Q","K"].includes(v) ? 10 : v === "A" ? 11 : parseInt(v);
@@ -76,7 +77,7 @@ function ScoreChip({ value, bust }: { value: number; bust?: boolean }) {
 export default function Blackjack() {
   const [betInput, setBetInput] = useState(100);
   const [activeBet, setActiveBet] = useState(0);
-  const [balance, setBalance] = useState(STARTING_BALANCE);
+  const { balance, updateBalance, needsWallet, currencyLabel } = useGameBalance();
   const [deck, setDeck] = useState<Card[]>([]);
   const [playerCards, setPlayerCards] = useState<Card[]>([]);
   const [dealerCards, setDealerCards] = useState<Card[]>([]);
@@ -84,7 +85,7 @@ export default function Blackjack() {
   const [outcome, setOutcome] = useState<"win"|"push"|"lose"|"bust"|"">("");
 
   const betAmount = betInput;
-  const canDeal = gameState === "betting" && betAmount > 0 && betAmount <= balance;
+  const canDeal = gameState === "betting" && !needsWallet && betAmount > 0 && betAmount <= balance;
   const playerVal = handValue(playerCards);
   const dealerVal = handValue(dealerCards);
   const showDealerFull = gameState === "done";
@@ -93,13 +94,13 @@ export default function Blackjack() {
     if (!canDeal) return;
     const d = makeDeck();
     setActiveBet(betAmount);
-    setBalance(b => b - betAmount);
+    updateBalance(b => b - betAmount);
     setDeck(d.slice(4));
     setPlayerCards([d[0], d[2]]);
     setDealerCards([d[1], d[3]]);
     setGameState("playing");
     setOutcome("");
-  }, [canDeal, betAmount]);
+  }, [canDeal, betAmount, updateBalance]);
 
   const hit = useCallback(() => {
     if (gameState !== "playing") return;
@@ -122,8 +123,8 @@ export default function Blackjack() {
     const res: "win"|"push"|"lose" = dv > 21 || pv > dv ? "win" : pv === dv ? "push" : "lose";
     setGameState("done");
     setOutcome(res);
-    setBalance(b => res === "win" ? b + activeBet * 2 : res === "push" ? b + activeBet : b);
-  }, [gameState, dealerCards, deck, playerCards, activeBet]);
+    updateBalance(b => res === "win" ? b + activeBet * 2 : res === "push" ? b + activeBet : b);
+  }, [gameState, dealerCards, deck, playerCards, activeBet, updateBalance]);
 
   const newRound = () => {
     setGameState("betting");
@@ -148,7 +149,7 @@ export default function Blackjack() {
           <div>
             <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
             <div className="font-cinzel font-bold text-lg text-yellow-300">
-              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">$CHOG</span>
+              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
             </div>
           </div>
           <AnimatePresence>
@@ -239,8 +240,18 @@ export default function Blackjack() {
         <div className="border-t border-purple-500/15 bg-black/20 px-5 py-4">
           <AnimatePresence mode="wait">
 
-            {/* BETTING state — bet selector + Deal */}
-            {gameState === "betting" && (
+            {/* BETTING state — wallet gate (real mode) or bet selector + Deal */}
+            {gameState === "betting" && needsWallet && (
+              <motion.div
+                key="betting-wallet-gate"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+              >
+                <WalletGateNotice />
+              </motion.div>
+            )}
+            {gameState === "betting" && !needsWallet && (
               <motion.div
                 key="betting-controls"
                 initial={{ opacity: 0, y: 8 }}

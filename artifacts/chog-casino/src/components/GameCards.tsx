@@ -85,15 +85,13 @@ function GameCard({ game, index }: { game: Game; index: number }) {
       <div className={`absolute inset-0 bg-gradient-to-br ${game.gradient} opacity-60`} />
 
       <div className="relative p-6 sm:p-8">
-        <div className="flex items-start justify-between mb-6">
-          <motion.div
-            animate={{ rotate: hovered ? [0, -10, 10, -5, 5, 0] : 0 }}
-            transition={{ duration: 0.5 }}
-            className="text-6xl select-none"
-            data-testid={`game-emoji-${game.id}`}
+        <div className="flex items-start justify-between mb-4">
+          <h3
+            className="font-cinzel font-bold text-2xl text-white tracking-wide"
+            data-testid={`game-name-${game.id}`}
           >
-            {game.emoji}
-          </motion.div>
+            {game.name}
+          </h3>
           <span
             className={`text-[10px] font-bold tracking-[0.2em] px-2.5 py-1 rounded-full border ${game.tagColor}`}
             data-testid={`game-tag-${game.id}`}
@@ -102,12 +100,12 @@ function GameCard({ game, index }: { game: Game; index: number }) {
           </span>
         </div>
 
-        <h3
-          className="font-cinzel font-bold text-2xl text-white mb-6 tracking-wide"
-          data-testid={`game-name-${game.id}`}
+        <p
+          className="text-sm text-purple-200/60 leading-relaxed mb-6"
+          data-testid={`game-description-${game.id}`}
         >
-          {game.name}
-        </h3>
+          {game.description}
+        </p>
 
         <div className="flex items-center justify-between">
           <div>

@@ -11,7 +11,9 @@ import CoinFlip from "@/pages/games/CoinFlip";
 import Mines from "@/pages/games/Mines";
 import Roulette from "@/pages/games/Roulette";
 import Blackjack from "@/pages/games/Blackjack";
+import Profile from "@/pages/Profile";
 import { wagmiConfig } from "@/lib/wagmi";
+import { GameModeProvider } from "@/context/GameModeContext";
 import "@rainbow-me/rainbowkit/styles.css";
 
 const queryClient = new QueryClient();
@@ -25,6 +27,7 @@ function Router() {
       <Route path="/games/mines" component={Mines} />
       <Route path="/games/roulette" component={Roulette} />
       <Route path="/games/blackjack" component={Blackjack} />
+      <Route path="/profile" component={Profile} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -43,12 +46,14 @@ function App() {
             overlayBlur: "small",
           })}
         >
-          <TooltipProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-              <Router />
-            </WouterRouter>
-            <Toaster />
-          </TooltipProvider>
+          <GameModeProvider>
+            <TooltipProvider>
+              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                <Router />
+              </WouterRouter>
+              <Toaster />
+            </TooltipProvider>
+          </GameModeProvider>
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>

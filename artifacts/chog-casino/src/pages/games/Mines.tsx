@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
+import WalletGateNotice from "@/components/WalletGateNotice";
+import { useGameBalance } from "@/hooks/useGameBalance";
 import bgImage from "@assets/image_1781811958820.png";
 import diamondImg from "@assets/chog_mines_diamond_1781814946879.png";
 import bombImg from "@assets/chog_mines_2_1781814964561.png";
@@ -106,8 +108,13 @@ export default function Mines() {
   const [multiplier, setMultiplier] = useState(1);
   const [safeRevealed, setSafeRevealed] = useState(0);
 
+  const { balance, updateBalance, resetBalance, needsWallet, currencyLabel } = useGameBalance();
+  const canStart = !needsWallet && bet > 0 && bet <= balance;
+
   const start = () => {
+    if (!canStart) return;
     const newGrid = generateGrid(mineCount);
+    updateBalance(b => b - bet); // stake is deducted upfront; cashing out pays it back × multiplier
     setGrid(newGrid);
     setRevealed(Array(GRID_SIZE).fill(false));
     setGameState("playing");
@@ -138,6 +145,7 @@ export default function Mines() {
 
   const cashOut = () => {
     if (gameState !== "playing" || safeRevealed === 0) return;
+    updateBalance(b => b + Math.round(bet * multiplier));
     setGameState("cashed");
     setRevealed(Array(GRID_SIZE).fill(true));
   };
@@ -250,9 +258,20 @@ export default function Mines() {
         {/* Controls at the bottom */}
         <div className="px-4 sm:px-5 pb-5 space-y-3 border-t border-purple-500/10 pt-4">
 
+          {/* Balance row */}
+          <div className="flex items-center justify-between px-1">
+            <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Balance</div>
+            <div className="font-cinzel font-bold text-lg text-yellow-300">
+              {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
+            </div>
+          </div>
+
+          {/* Real mode requires a wallet */}
+          {needsWallet && (gameState === "idle" || isOver) && <WalletGateNotice />}
+
           {/* Bet + Mines row — only when idle or after game */}
           <AnimatePresence>
-            {(gameState === "idle" || isOver) && (
+            {(gameState === "idle" || isOver) && !needsWallet && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -261,9 +280,9 @@ export default function Mines() {
               >
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
-                    Bet ($CHOG)
+                    Bet ({currencyLabel})
                   </label>
-                  <BetControls value={bet} onChange={setBet} max={100_000} />
+                  <BetControls value={bet} onChange={setBet} max={balance} />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
@@ -288,16 +307,30 @@ export default function Mines() {
 
 
           {/* Action buttons */}
-          {gameState === "idle" || isOver ? (
-            <motion.button
-              whileHover={{ scale: 1.02, y: -1 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={start}
-              className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 transition-all"
-              data-testid="button-start-mines"
-            >
-              {gameState === "idle" ? "Place Bet & Start" : "Play Again"}
-            </motion.button>
+          {(gameState === "idle" || isOver) && needsWallet ? null : gameState === "idle" || isOver ? (
+            <>
+              <motion.button
+                whileHover={canStart ? { scale: 1.02, y: -1 } : {}}
+                whileTap={canStart ? { scale: 0.98 } : {}}
+                onClick={start}
+                disabled={!canStart}
+                className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                data-testid="button-start-mines"
+              >
+                {balance <= 0 ? `Out of ${currencyLabel}` : gameState === "idle" ? "Place Bet & Start" : "Play Again"}
+              </motion.button>
+              {balance <= 0 && (
+                <motion.button
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  onClick={resetBalance}
+                  className="w-full py-3 rounded-xl font-cinzel font-bold text-sm tracking-widest uppercase glass border border-purple-500/40 text-purple-300"
+                  data-testid="button-reset-balance"
+                >
+                  Reset Balance
+                </motion.button>
+              )}
+            </>
           ) : (
             <motion.button
               whileHover={{ scale: 1.02, y: -1 }}

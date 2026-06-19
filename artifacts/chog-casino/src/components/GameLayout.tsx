@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import { useLocation } from "wouter";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import GameModeToggle from "@/components/GameModeToggle";
 
 interface GameLayoutProps {
   title: string;
@@ -47,6 +48,10 @@ export default function GameLayout({
             <ArrowLeft className="w-4 h-4" />
             Back to Lobby
           </motion.button>
+
+          <div className="hidden sm:block">
+            <GameModeToggle />
+          </div>
 
           <motion.div
             initial={{ opacity: 0, x: 20 }}

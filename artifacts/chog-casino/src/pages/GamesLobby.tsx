@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { ArrowLeft } from "lucide-react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import ParticlesBg from "@/components/ParticlesBg";
+import GameModeToggle from "@/components/GameModeToggle";
 import coinFlipBg from "@assets/image_1781811951344.png";
 import minesBg from "@assets/image_1781811958820.png";
 import rouletteBg from "@assets/image_1781811963908.png";
@@ -93,14 +94,7 @@ function GameCard({ game, index }: { game: Game; index: number }) {
       </div>
 
       <div className="relative p-6 h-72 flex flex-col justify-between">
-        <div className="flex items-start justify-between">
-          <motion.div
-            animate={{ rotate: hovered ? [0, -10, 10, -5, 5, 0] : 0 }}
-            transition={{ duration: 0.5 }}
-            className="text-5xl select-none drop-shadow-lg"
-          >
-            {game.emoji}
-          </motion.div>
+        <div className="flex items-start justify-end">
           <span
             className={`text-[10px] font-bold tracking-[0.2em] px-2.5 py-1 rounded-full border backdrop-blur-sm ${game.tagColor}`}
           >
@@ -154,6 +148,10 @@ export default function GamesLobby() {
             <ArrowLeft className="w-4 h-4" />
             Back to Lobby
           </motion.button>
+
+          <div className="hidden sm:block">
+            <GameModeToggle />
+          </div>
 
           <motion.div
             initial={{ opacity: 0, x: 20 }}

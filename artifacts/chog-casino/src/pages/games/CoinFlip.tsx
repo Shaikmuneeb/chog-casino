@@ -2,6 +2,8 @@ import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
+import WalletGateNotice from "@/components/WalletGateNotice";
+import { useGameBalance } from "@/hooks/useGameBalance";
 import bgImage from "@assets/image_1781811951344.png";
 import headsImg from "@assets/chog_heads_side_1781813831765.png";
 import tailsImg from "@assets/image_1781850363283.png";
@@ -9,7 +11,6 @@ import tailsImg from "@assets/image_1781850363283.png";
 type Side = "heads" | "tails";
 type Phase = "idle" | "spinning" | "result";
 
-const STARTING_BALANCE = 10_000;
 const SPIN_DURATION = 2.0; // seconds
 
 // ── Web Audio ─────────────────────────────────────────────────────────────────
@@ -76,12 +77,12 @@ export default function CoinFlip() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Side | null>(null);
   const [won, setWon] = useState<boolean | null>(null);
-  const [balance, setBalance] = useState(STARTING_BALANCE);
+  const { balance, updateBalance, resetBalance, needsWallet, currencyLabel } = useGameBalance();
   // which image to show — starts as heads, swaps to result image just before last flip ends
   const [displaySide, setDisplaySide] = useState<Side>("heads");
 
   const betAmount = bet;
-  const canFlip = phase === "idle" && betAmount > 0 && betAmount <= balance;
+  const canFlip = phase === "idle" && !needsWallet && betAmount > 0 && betAmount <= balance;
 
   const flip = useCallback(() => {
     if (!canFlip) return;
@@ -104,11 +105,11 @@ export default function CoinFlip() {
     setTimeout(() => {
       setResult(outcome);
       setWon(didWin);
-      setBalance((b) => didWin ? b + betAmount : b - betAmount);
+      updateBalance((b) => didWin ? b + betAmount : b - betAmount);
       setPhase("result");
       didWin ? playWin() : playLose();
     }, SPIN_DURATION * 1000);
-  }, [canFlip, choice, betAmount]);
+  }, [canFlip, choice, betAmount, updateBalance]);
 
   const reset = () => {
     setPhase("idle");
@@ -138,7 +139,7 @@ export default function CoinFlip() {
               animate={{ scale: 1 }}
               className="font-cinzel font-bold text-xl text-yellow-300"
             >
-              {balance.toLocaleString()} <span className="text-sm text-yellow-400/60">$CHOG</span>
+              {balance.toLocaleString()} <span className="text-sm text-yellow-400/60">{currencyLabel}</span>
             </motion.div>
           </div>
           <AnimatePresence mode="wait">
@@ -284,8 +285,11 @@ export default function CoinFlip() {
         {/* Bet controls */}
         <BetControls value={bet} onChange={setBet} max={balance} disabled={phase !== "idle"} />
 
+        {/* Real mode requires a wallet */}
+        {needsWallet && <WalletGateNotice />}
+
         {/* Primary action */}
-        {phase !== "result" ? (
+        {needsWallet ? null : phase !== "result" ? (
           <motion.button
             whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
             whileTap={canFlip ? { scale: 0.97 } : {}}
@@ -294,7 +298,7 @@ export default function CoinFlip() {
             className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-yellow-500 to-yellow-700 text-black neon-gold border border-yellow-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             data-testid="button-flip-coin"
           >
-            {phase === "spinning" ? "Flipping…" : balance <= 0 ? "Out of $CHOG" : "Flip Coin"}
+            {phase === "spinning" ? "Flipping…" : balance <= 0 ? `Out of ${currencyLabel}` : "Flip Coin"}
           </motion.button>
         ) : (
           <motion.button
@@ -310,15 +314,15 @@ export default function CoinFlip() {
           </motion.button>
         )}
 
-        {balance <= 0 && phase === "idle" && (
+        {balance <= 0 && phase === "idle" && !needsWallet && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            onClick={() => { setBalance(STARTING_BALANCE); setResult(null); setWon(null); }}
+            onClick={() => { resetBalance(); setResult(null); setWon(null); }}
             className="w-full py-3 rounded-xl font-cinzel font-bold text-sm tracking-widest uppercase glass border border-purple-500/40 text-purple-300"
             data-testid="button-reset-balance"
           >
-            Reset Balance (10,000 $CHOG)
+            Reset Balance
           </motion.button>
         )}
       </div>
