@@ -22,6 +22,16 @@ export default function HeroSection() {
       </div>
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <motion.p
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.35 }}
+          className="font-cinzel tracking-[0.35em] uppercase text-sm sm:text-base text-yellow-300/80 mb-6"
+          data-testid="hero-tagline"
+        >
+          Flip · Mine · Spin · Deal — Winners Welcome
+        </motion.p>
+
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
