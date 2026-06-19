@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Wallet, ArrowDownToLine } from "lucide-react";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import ConnectButton from "@/components/ConnectButton";
 import type { GateReason } from "@/hooks/useGameBalance";
 
 /**
@@ -43,7 +43,7 @@ export default function WalletGateNotice({ reason = "wallet" }: { reason?: GateR
         Connect your wallet to play with real $CHOG, or switch to{" "}
         <span className="text-purple-200 font-medium">Fun</span> mode to play with free credits.
       </p>
-      <ConnectButton label="Connect Wallet" chainStatus="icon" showBalance={false} />
+      <ConnectButton />
     </motion.div>
   );
 }

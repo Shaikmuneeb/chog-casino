@@ -1,6 +1,6 @@
-import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
+import ConnectButton from "@/components/ConnectButton";
 import ProfileDropdown from "@/components/ProfileDropdown";
 import GameModeToggle from "@/components/GameModeToggle";
 
@@ -34,11 +34,7 @@ export default function Navbar() {
           </div>
 
           <div data-testid="connect-wallet-button">
-            <ConnectButton
-              label="Connect Wallet"
-              chainStatus="icon"
-              showBalance={false}
-            />
+            <ConnectButton />
           </div>
         </div>
       </div>

@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import { useLocation } from "wouter";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import ConnectButton from "@/components/ConnectButton";
 import GameModeToggle from "@/components/GameModeToggle";
 
 interface GameLayoutProps {
@@ -41,7 +41,7 @@ export default function GameLayout({
             transition={{ duration: 0.4 }}
             whileHover={{ scale: 1.05, x: -2 }}
             whileTap={{ scale: 0.97 }}
-            onClick={() => setLocation("/")}
+            onClick={() => setLocation("/games")}
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl glass border border-purple-500/30 text-purple-200 hover:text-yellow-300 hover:border-yellow-400/40 transition-colors duration-200 text-sm font-medium tracking-wide"
             data-testid="button-back-to-lobby"
           >
@@ -59,7 +59,7 @@ export default function GameLayout({
             transition={{ duration: 0.4 }}
             data-testid="game-connect-wallet"
           >
-            <ConnectButton label="Connect Wallet" chainStatus="icon" showBalance={true} />
+            <ConnectButton />
           </motion.div>
         </header>
 

@@ -62,7 +62,8 @@ export default defineConfig({
         // Split heavy wallet/web3 libs out of the main chunk to keep memory
         // and individual chunk sizes down during the build.
         manualChunks: {
-          web3: ["wagmi", "viem", "@rainbow-me/rainbowkit"],
+          privy: ["@privy-io/react-auth"],
+          web3: ["viem"],
           react: ["react", "react-dom"],
           motion: ["framer-motion"],
         },

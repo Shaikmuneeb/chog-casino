@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { ArrowLeft } from "lucide-react";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import ConnectButton from "@/components/ConnectButton";
 import ParticlesBg from "@/components/ParticlesBg";
 import GameModeToggle from "@/components/GameModeToggle";
 import coinFlipBg from "@assets/image_1781811951344.png";
@@ -158,7 +158,7 @@ export default function GamesLobby() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.4 }}
           >
-            <ConnectButton label="Connect Wallet" chainStatus="icon" showBalance={true} />
+            <ConnectButton />
           </motion.div>
         </header>
 

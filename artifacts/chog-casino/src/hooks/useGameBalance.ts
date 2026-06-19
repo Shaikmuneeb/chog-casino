@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useAccount } from "wagmi";
+import { useWallet } from "@/hooks/useWallet";
 import { useGameMode } from "@/context/GameModeContext";
 
 const FUN_KEY = "chog_fun_balance";
@@ -39,7 +39,7 @@ if (typeof localStorage !== "undefined" && !localStorage.getItem("chog_real_rese
  */
 export function useGameBalance() {
   const { mode } = useGameMode();
-  const { isConnected } = useAccount();
+  const { connected: isConnected } = useWallet();
   const [funBalance, setFunBalance] = useState(() => readBalance(FUN_KEY, FUN_DEFAULT));
   const [realBalance, setRealBalance] = useState(() => readBalance(REAL_KEY, REAL_DEFAULT));
 

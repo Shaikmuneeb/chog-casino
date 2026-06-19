@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@privy-io/react-auth": "^3.32.0",
     "@rainbow-me/rainbowkit": "^2.2.11",
     "viem": "^2.52.2",
     "wagmi": "^3.6.17"

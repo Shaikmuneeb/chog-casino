@@ -2,8 +2,8 @@ import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { ArrowLeft, Twitter, MessageCircle, CheckCircle2, LogOut, Loader2, Wallet, Camera, Check } from "lucide-react";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount } from "wagmi";
+import ConnectButton from "@/components/ConnectButton";
+import { useWallet } from "@/hooks/useWallet";
 import ParticlesBg from "@/components/ParticlesBg";
 import GameModeToggle from "@/components/GameModeToggle";
 import avatarImage from "@assets/chog_heads_side_1781813831765.png";
@@ -42,7 +42,7 @@ const SOCIALS: SocialOption[] = [
 
 export default function Profile() {
   const [, setLocation] = useLocation();
-  const { isConnected: walletConnected } = useAccount();
+  const { connected: walletConnected } = useWallet();
   const { connection, connecting, connectX, connectDiscord, disconnect } = useSocialConnection();
   const { avatar, username, saveAvatar, saveUsername } = useProfile();
 
@@ -103,7 +103,7 @@ export default function Profile() {
             <GameModeToggle />
           </div>
 
-          <ConnectButton label="Connect Wallet" chainStatus="icon" showBalance={false} />
+          <ConnectButton />
         </header>
 
         {/* Content */}

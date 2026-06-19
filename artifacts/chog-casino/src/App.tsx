@@ -1,7 +1,6 @@
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider } from "wagmi";
-import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
+import { PrivyProvider } from "@privy-io/react-auth";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -12,11 +11,11 @@ import Mines from "@/pages/games/Mines";
 import Roulette from "@/pages/games/Roulette";
 import Blackjack from "@/pages/games/Blackjack";
 import Profile from "@/pages/Profile";
-import { wagmiConfig } from "@/lib/wagmi";
+import { monad } from "@/chains";
 import { GameModeProvider } from "@/context/GameModeContext";
-import "@rainbow-me/rainbowkit/styles.css";
 
 const queryClient = new QueryClient();
+const privyAppId = import.meta.env.VITE_PRIVY_APP_ID;
 
 function Router() {
   return (
@@ -35,28 +34,34 @@ function Router() {
 
 function App() {
   return (
-    <WagmiProvider config={wagmiConfig}>
+    <PrivyProvider
+      appId={privyAppId}
+      config={{
+        loginMethods: ["email", "wallet"],
+        appearance: {
+          theme: "dark",
+          accentColor: "#676FFF",
+        },
+        embeddedWallets: {
+          ethereum: {
+            createOnLogin: "users-without-wallets",
+          },
+        },
+        defaultChain: monad,
+        supportedChains: [monad],
+      }}
+    >
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider
-          theme={darkTheme({
-            accentColor: "hsl(280, 80%, 60%)",
-            accentColorForeground: "white",
-            borderRadius: "medium",
-            fontStack: "system",
-            overlayBlur: "small",
-          })}
-        >
-          <GameModeProvider>
-            <TooltipProvider>
-              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                <Router />
-              </WouterRouter>
-              <Toaster />
-            </TooltipProvider>
-          </GameModeProvider>
-        </RainbowKitProvider>
+        <GameModeProvider>
+          <TooltipProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <Router />
+            </WouterRouter>
+            <Toaster />
+          </TooltipProvider>
+        </GameModeProvider>
       </QueryClientProvider>
-    </WagmiProvider>
+    </PrivyProvider>
   );
 }
 
