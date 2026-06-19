@@ -1,0 +1,121 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+
+export default function Roulette() {
+  const [betAmount, setBetAmount] = useState(100);
+  const [selectedBet, setSelectedBet] = useState<string | number>('red'); // red, black, odd, even, or number
+  const [isSpinning, setIsSpinning] = useState(false);
+  const [result, setResult] = useState<number | null>(null);
+  const [winAmount, setWinAmount] = useState(0);
+  const [balance, setBalance] = useState(10000);
+
+  const spinWheel = () => {
+    if (betAmount > balance) return alert("Not enough balance!");
+
+    setIsSpinning(true);
+    setResult(null);
+    setWinAmount(0);
+
+    // Simulate realistic spin time
+    setTimeout(() => {
+      const landedNumber = Math.floor(Math.random() * 37); // 0-36
+      setResult(landedNumber);
+
+      let won = false;
+      let multiplier = 0;
+
+      if (selectedBet === 'red' && [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36].includes(landedNumber)) {
+        won = true; multiplier = 2;
+      } else if (selectedBet === 'black' && [2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35].includes(landedNumber)) {
+        won = true; multiplier = 2;
+      } else if (selectedBet === 'odd' && landedNumber % 2 === 1 && landedNumber !== 0) {
+        won = true; multiplier = 2;
+      } else if (selectedBet === 'even' && landedNumber % 2 === 0 && landedNumber !== 0) {
+        won = true; multiplier = 2;
+      } else if (typeof selectedBet === 'number' && selectedBet === landedNumber) {
+        won = true; multiplier = 36;
+      }
+
+      if (won) {
+        const winnings = betAmount * multiplier;
+        setWinAmount(winnings);
+        setBalance(prev => prev + winnings);
+      } else {
+        setBalance(prev => prev - betAmount);
+      }
+
+      setIsSpinning(false);
+    }, 2500);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0a0618] text-white p-6">
+      <div className="max-w-5xl mx-auto">
+        <h1 className="text-5xl font-bold text-center mb-8 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+          🎰 CHOG ROULETTE
+        </h1>
+
+        {/* Balance & Bet Controls */}
+        <div className="glass rounded-3xl p-6 mb-8 flex flex-wrap justify-between items-center gap-6">
+          <div>
+            <p className="text-purple-300">BALANCE</p>
+            <p className="text-3xl font-bold">{balance.toLocaleString()} $CHOG</p>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div>
+              <p className="text-purple-300 mb-1">BET AMOUNT</p>
+              <div className="flex gap-2">
+                {[50, 100, 250, 500].map((amt) => (
+                  <button
+                    key={amt}
+                    onClick={() => setBetAmount(amt)}
+                    className={`px-5 py-2 rounded-xl ${betAmount === amt ? 'bg-purple-600' : 'glass'}`}
+                  >
+                    {amt}
+                  </button>
+                ))}
+                <button onClick={() => setBetAmount(Math.floor(balance / 2))} className="px-5 py-2 rounded-xl glass">
+                  MAX
+                </button>
+              </div>
+            </div>
+
+            <div className="text-3xl font-bold text-purple-400">
+              {betAmount} $CHOG
+            </div>
+          </div>
+        </div>
+
+        {/* Wheel */}
+        <div className="flex justify-center mb-10">
+          <motion.div
+            animate={{ rotate: isSpinning ? 360 * 8 : 0 }}
+            transition={{ duration: 2.5, ease: "easeOut" }}
+            className="relative w-80 h-80"
+          >
+            <img
+              src="/assets/roulette-wheel.png" // ← Put your good wheel image here
+              alt="Roulette Wheel"
+              className="w-full h-full rounded-full border-8 border-yellow-500 shadow-2xl"
+            />
+            {isSpinning && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-6 h-6 bg-yellow-400 rounded-full animate-ping" />
+              </div>
+            )}
+          </motion.div>
+        </div>
+
+        {/* Result */}
+        {result !== null && (
+          <div className="text-center mb-8">
+            <p className="text-4xl font-bold">
+              Landed on <span className="text-yellow-400">{result}</span>
+            </p>
+            {winAmount > 0 ? (
+              <p className="text-green-400 text-2xl">+{winAmount} $CHOG YOU WIN!</p>
+            ) : (
+              <p className="text-red-400 text-
