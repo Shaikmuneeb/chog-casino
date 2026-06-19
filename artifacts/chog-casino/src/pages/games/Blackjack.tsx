@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
+import BetControls from "@/components/BetControls";
 import bgImage from "@assets/image_1781811969584.png";
 
 type Card = { value: string; suit: string; numeric: number };
@@ -9,7 +10,6 @@ type GameState = "betting" | "playing" | "done";
 const SUITS = ["♠", "♥", "♦", "♣"];
 const VALUES = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
 const STARTING_BALANCE = 10_000;
-const QUICK_BETS = [50, 100, 250, 500];
 
 function makeCard(v: string, s: string): Card {
   const n = ["J","Q","K"].includes(v) ? 10 : v === "A" ? 11 : parseInt(v);
@@ -74,7 +74,7 @@ function ScoreChip({ value, bust }: { value: number; bust?: boolean }) {
 }
 
 export default function Blackjack() {
-  const [betInput, setBetInput] = useState("100");
+  const [betInput, setBetInput] = useState(100);
   const [activeBet, setActiveBet] = useState(0);
   const [balance, setBalance] = useState(STARTING_BALANCE);
   const [deck, setDeck] = useState<Card[]>([]);
@@ -83,7 +83,7 @@ export default function Blackjack() {
   const [gameState, setGameState] = useState<GameState>("betting");
   const [outcome, setOutcome] = useState<"win"|"push"|"lose"|"bust"|"">("");
 
-  const betAmount = Math.max(0, parseInt(betInput) || 0);
+  const betAmount = betInput;
   const canDeal = gameState === "betting" && betAmount > 0 && betAmount <= balance;
   const playerVal = handValue(playerCards);
   const dealerVal = handValue(dealerCards);
@@ -248,40 +248,9 @@ export default function Blackjack() {
                 exit={{ opacity: 0, y: -6 }}
                 className="flex items-end gap-3"
               >
-                {/* Bet input + quick buttons */}
-                <div className="flex-1 space-y-2">
-                  <label className="text-[10px] text-purple-300/40 tracking-widest uppercase">Bet ($CHOG)</label>
-                  <input
-                    type="number"
-                    value={betInput}
-                    onChange={e => setBetInput(e.target.value)}
-                    min="1"
-                    max={balance}
-                    className="w-full px-3 py-2 rounded-xl glass border border-purple-500/30 text-white font-mono text-base focus:outline-none focus:border-yellow-400/50 transition-colors"
-                    data-testid="input-blackjack-bet"
-                  />
-                  <div className="flex gap-1.5">
-                    {QUICK_BETS.map(v => (
-                      <button
-                        key={v}
-                        onClick={() => setBetInput(String(v))}
-                        className={`flex-1 py-1.5 rounded-lg text-[11px] font-medium border transition-all ${
-                          betAmount === v
-                            ? "bg-yellow-500/20 border-yellow-400/50 text-yellow-300"
-                            : "glass border-purple-700/30 text-purple-300 hover:border-purple-400/40"
-                        }`}
-                        data-testid={`button-bet-preset-${v}`}
-                      >
-                        {v}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => setBetInput(String(balance))}
-                      className="flex-1 py-1.5 rounded-lg text-[11px] font-medium glass border border-yellow-700/30 text-yellow-400 hover:border-yellow-500/50 transition-all"
-                    >
-                      MAX
-                    </button>
-                  </div>
+                {/* Bet controls */}
+                <div className="flex-1">
+                  <BetControls value={betInput} onChange={setBetInput} max={balance} />
                 </div>
 
                 {/* Deal button */}

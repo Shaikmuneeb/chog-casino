@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
+import BetControls from "@/components/BetControls";
 import bgImage from "@assets/image_1781811958820.png";
 import diamondImg from "@assets/chog_mines_diamond_1781814946879.png";
 import bombImg from "@assets/chog_mines_2_1781814964561.png";
@@ -97,7 +98,7 @@ function calcMultiplier(safe: number, mines: number): number {
 const MINE_OPTIONS = Array.from({ length: 25 }, (_, i) => i + 1);
 
 export default function Mines() {
-  const [bet, setBet] = useState("100");
+  const [bet, setBet] = useState(100);
   const [mineCount, setMineCount] = useState(5);
   const [grid, setGrid] = useState<CellState[]>(Array(GRID_SIZE).fill("hidden"));
   const [revealed, setRevealed] = useState<boolean[]>(Array(GRID_SIZE).fill(false));
@@ -256,23 +257,16 @@ export default function Mines() {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 4 }}
-                className="grid grid-cols-2 gap-3"
+                className="space-y-3"
               >
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium">
+                  <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
                     Bet ($CHOG)
                   </label>
-                  <input
-                    type="number"
-                    value={bet}
-                    onChange={(e) => setBet(e.target.value)}
-                    min="1"
-                    className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white font-mono text-sm focus:outline-none focus:border-purple-400/60 transition-colors"
-                    data-testid="input-mines-bet"
-                  />
+                  <BetControls value={bet} onChange={setBet} max={100_000} />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium">
+                  <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
                     Mines
                   </label>
                   <select
@@ -292,20 +286,6 @@ export default function Mines() {
             )}
           </AnimatePresence>
 
-          {/* Quick bet presets when idle */}
-          {(gameState === "idle" || isOver) && (
-            <div className="flex gap-2">
-              {["100", "500", "1000", "5000"].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setBet(v)}
-                  className="flex-1 py-1.5 rounded-lg text-xs glass border border-purple-700/30 text-purple-300 hover:border-purple-400/40 hover:text-purple-100 transition-colors"
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          )}
 
           {/* Action buttons */}
           {gameState === "idle" || isOver ? (

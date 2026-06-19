@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
+import BetControls from "@/components/BetControls";
 import bgImage from "@assets/image_1781811963908.png";
 
 type BetType = "red" | "black" | "green" | "odd" | "even" | "1-18" | "19-36";
@@ -41,7 +42,7 @@ const betOptions: { label: string; type: BetType; style: string }[] = [
 ];
 
 export default function Roulette() {
-  const [bet, setBet] = useState("100");
+  const [bet, setBet] = useState(100);
   const [betType, setBetType] = useState<BetType>("red");
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState<number | null>(null);
@@ -133,20 +134,8 @@ export default function Roulette() {
           </div>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs text-purple-300/60 tracking-widest uppercase font-medium">
-            Bet Amount ($CHOG)
-          </label>
-          <input
-            type="number"
-            value={bet}
-            onChange={(e) => setBet(e.target.value)}
-            step="1"
-            min="1"
-            className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50"
-            data-testid="input-roulette-bet"
-          />
-        </div>
+        {/* Bet controls */}
+        <BetControls value={bet} onChange={setBet} max={100_000} disabled={spinning} />
 
         <motion.button
           whileHover={{ scale: 1.03, y: -2 }}

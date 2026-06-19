@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
+import BetControls from "@/components/BetControls";
 import bgImage from "@assets/image_1781811951344.png";
 import headsImg from "@assets/chog_heads_side_1781813831765.png";
 import tailsImg from "@assets/image_1781850363283.png";
@@ -70,7 +71,7 @@ const spinKeyframes = Array.from({ length: FLIPS * 2 + 1 }, (_, i) =>
 );
 
 export default function CoinFlip() {
-  const [bet, setBet] = useState("100");
+  const [bet, setBet] = useState(100);
   const [choice, setChoice] = useState<Side>("heads");
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Side | null>(null);
@@ -79,7 +80,7 @@ export default function CoinFlip() {
   // which image to show — starts as heads, swaps to result image just before last flip ends
   const [displaySide, setDisplaySide] = useState<Side>("heads");
 
-  const betAmount = parseInt(bet) || 0;
+  const betAmount = bet;
   const canFlip = phase === "idle" && betAmount > 0 && betAmount <= balance;
 
   const flip = useCallback(() => {
@@ -280,44 +281,8 @@ export default function CoinFlip() {
           ))}
         </div>
 
-        {/* Bet input */}
-        <div className="space-y-2">
-          <label className="text-xs text-purple-300/60 tracking-widest uppercase font-medium">
-            Bet Amount ($CHOG)
-          </label>
-          <input
-            type="number"
-            value={bet}
-            onChange={(e) => setBet(e.target.value)}
-            step="1"
-            min="1"
-            max={balance}
-            disabled={phase !== "idle"}
-            className="w-full px-4 py-3 rounded-xl glass border border-purple-500/30 text-white font-mono text-lg focus:outline-none focus:border-yellow-400/50 transition-colors disabled:opacity-50"
-            data-testid="input-bet-amount"
-          />
-          <div className="flex gap-2">
-            {["500", "1000", "2000", "5000"].map((v) => (
-              <button
-                key={v}
-                onClick={() => setBet(v)}
-                disabled={phase !== "idle"}
-                className="flex-1 py-1.5 rounded-lg text-xs glass border border-purple-700/30 text-purple-300 hover:border-yellow-400/30 hover:text-yellow-300 transition-colors disabled:opacity-40"
-                data-testid={`button-bet-preset-${v}`}
-              >
-                {v}
-              </button>
-            ))}
-            <button
-              onClick={() => setBet(String(balance))}
-              disabled={phase !== "idle"}
-              className="flex-1 py-1.5 rounded-lg text-xs glass border border-yellow-600/40 text-yellow-400 hover:border-yellow-400/60 transition-colors disabled:opacity-40"
-              data-testid="button-bet-max"
-            >
-              MAX
-            </button>
-          </div>
-        </div>
+        {/* Bet controls */}
+        <BetControls value={bet} onChange={setBet} max={balance} disabled={phase !== "idle"} />
 
         {/* Primary action */}
         {phase !== "result" ? (
