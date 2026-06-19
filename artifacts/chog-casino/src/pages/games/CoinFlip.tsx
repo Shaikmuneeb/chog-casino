@@ -1,75 +1,73 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import bgImage from "@assets/image_1781811951344.png";
 import headsImg from "@assets/chog_heads_side_1781813831765.png";
-import tailsImg from "@assets/chog_tails_side_1781813835529.png";
+import tailsImg from "@assets/image_1781850363283.png";
 
 type Side = "heads" | "tails";
 type Phase = "idle" | "spinning" | "result";
 
 const STARTING_BALANCE = 10_000;
-const FLIP_DURATION = 2.2;
+const SPIN_DURATION = 2.0; // seconds
 
-// ── Web Audio helpers ─────────────────────────────────────────────────────────
-function getAudioCtx() {
-  if (typeof window === "undefined") return null;
-  return new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+// ── Web Audio ─────────────────────────────────────────────────────────────────
+function getCtx() {
+  return new (window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
 }
-
 function playSpin() {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  for (let i = 0; i < 8; i++) {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(300 + i * 80, ctx.currentTime + i * 0.22);
-    gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.22);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.22 + 0.18);
-    osc.start(ctx.currentTime + i * 0.22);
-    osc.stop(ctx.currentTime + i * 0.22 + 0.2);
-  }
+  try {
+    const ctx = getCtx();
+    for (let i = 0; i < 8; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(300 + i * 80, ctx.currentTime + i * 0.22);
+      gain.gain.setValueAtTime(0.1, ctx.currentTime + i * 0.22);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.22 + 0.18);
+      osc.start(ctx.currentTime + i * 0.22);
+      osc.stop(ctx.currentTime + i * 0.22 + 0.2);
+    }
+  } catch { undefined; }
 }
-
 function playWin() {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  const notes = [523, 659, 784, 1047];
-  notes.forEach((freq, i) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = "sine";
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.13);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.13 + 0.4);
-    osc.start(ctx.currentTime + i * 0.13);
-    osc.stop(ctx.currentTime + i * 0.13 + 0.45);
-  });
+  try {
+    const ctx = getCtx();
+    [523, 659, 784, 1047].forEach((f, i) => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sine"; osc.frequency.value = f;
+      gain.gain.setValueAtTime(0.16, ctx.currentTime + i * 0.13);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.13 + 0.4);
+      osc.start(ctx.currentTime + i * 0.13);
+      osc.stop(ctx.currentTime + i * 0.13 + 0.45);
+    });
+  } catch { undefined; }
 }
-
 function playLose() {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  const notes = [330, 277, 220];
-  notes.forEach((freq, i) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = "sawtooth";
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.18);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.35);
-    osc.start(ctx.currentTime + i * 0.18);
-    osc.stop(ctx.currentTime + i * 0.18 + 0.4);
-  });
+  try {
+    const ctx = getCtx();
+    [330, 277, 220].forEach((f, i) => {
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sawtooth"; osc.frequency.value = f;
+      gain.gain.setValueAtTime(0.1, ctx.currentTime + i * 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.35);
+      osc.start(ctx.currentTime + i * 0.18);
+      osc.stop(ctx.currentTime + i * 0.18 + 0.4);
+    });
+  } catch { undefined; }
 }
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Build scaleX keyframes that simulate many rapid flips (1→0→1 cycles)
+// Last keyframe always ends on 1 so the final image shows flat.
+const FLIPS = 10;
+const spinKeyframes = Array.from({ length: FLIPS * 2 + 1 }, (_, i) =>
+  i % 2 === 0 ? 1 : 0.04
+);
 
 export default function CoinFlip() {
   const [bet, setBet] = useState("100");
@@ -78,8 +76,8 @@ export default function CoinFlip() {
   const [result, setResult] = useState<Side | null>(null);
   const [won, setWon] = useState<boolean | null>(null);
   const [balance, setBalance] = useState(STARTING_BALANCE);
-  const [coinRotation, setCoinRotation] = useState(0);
-  const [showReaction, setShowReaction] = useState(false);
+  // which image to show — starts as heads, swaps to result image just before last flip ends
+  const [displaySide, setDisplaySide] = useState<Side>("heads");
 
   const betAmount = parseInt(bet) || 0;
   const canFlip = phase === "idle" && betAmount > 0 && betAmount <= balance;
@@ -87,38 +85,38 @@ export default function CoinFlip() {
   const flip = useCallback(() => {
     if (!canFlip) return;
 
+    const outcome: Side = Math.random() < 0.5 ? "heads" : "tails";
+    const didWin = outcome === choice;
+
     setPhase("spinning");
     setResult(null);
     setWon(null);
-    setShowReaction(false);
+    setDisplaySide("heads"); // show heads during spin — doesn't matter, it's flipping fast
     playSpin();
 
-    const outcome: Side = Math.random() < 0.5 ? "heads" : "tails";
-
-    // 5 full spins + land on correct face
-    const spins = 1800;
-    const landOffset = outcome === "heads" ? 0 : 180;
-    const current = coinRotation % 360;
-    const delta = ((landOffset - current) + 360) % 360 || 360;
-    setCoinRotation(coinRotation + spins + delta);
-
+    // Swap to the correct image at the midpoint of the last flip (coin is edge-on → invisible)
     setTimeout(() => {
-      const didWin = outcome === choice;
+      setDisplaySide(outcome);
+    }, (SPIN_DURATION - 0.12) * 1000);
+
+    // Reveal result
+    setTimeout(() => {
       setResult(outcome);
       setWon(didWin);
       setBalance((b) => didWin ? b + betAmount : b - betAmount);
       setPhase("result");
-      setShowReaction(true);
       didWin ? playWin() : playLose();
-    }, FLIP_DURATION * 1000);
-  }, [canFlip, coinRotation, choice, betAmount]);
+    }, SPIN_DURATION * 1000);
+  }, [canFlip, choice, betAmount]);
 
   const reset = () => {
     setPhase("idle");
     setResult(null);
     setWon(null);
-    setShowReaction(false);
+    setDisplaySide("heads");
   };
+
+  const coinImg = displaySide === "heads" ? headsImg : tailsImg;
 
   return (
     <GameLayout
@@ -158,104 +156,105 @@ export default function CoinFlip() {
           </AnimatePresence>
         </div>
 
-        {/* Coin + label */}
-        <div className="flex flex-col items-center gap-4 py-2">
-          {/* 3D coin */}
-          <div style={{ perspective: "700px", position: "relative" }}>
-            <motion.div
-              animate={{
-                rotateY: coinRotation,
-                scale: phase === "spinning" ? [1, 1.08, 1.05, 1.08, 1] : 1,
-              }}
-              transition={{
-                rotateY: {
-                  duration: FLIP_DURATION,
-                  ease: [0.22, 1, 0.36, 1],
-                },
-                scale: {
-                  duration: FLIP_DURATION,
-                  times: [0, 0.2, 0.5, 0.8, 1],
-                  ease: "easeInOut",
-                },
-              }}
+        {/* Coin */}
+        <div className="flex flex-col items-center gap-3 py-2">
+          <div className="relative" style={{ width: 200, height: 200 }}>
+            {/* Glow behind coin */}
+            <div
+              className="absolute inset-0 rounded-full pointer-events-none"
               style={{
-                transformStyle: "preserve-3d",
-                width: 200,
-                height: 200,
-                position: "relative",
-                filter: phase === "spinning"
-                  ? "drop-shadow(0 0 32px rgba(212,175,55,0.9))"
+                background: phase === "spinning"
+                  ? "radial-gradient(circle, rgba(212,175,55,0.3) 0%, transparent 70%)"
                   : won === true
-                  ? "drop-shadow(0 0 28px rgba(74,222,128,0.8))"
+                  ? "radial-gradient(circle, rgba(74,222,128,0.25) 0%, transparent 70%)"
                   : won === false
-                  ? "drop-shadow(0 0 28px rgba(248,113,113,0.7))"
-                  : "drop-shadow(0 0 20px rgba(212,175,55,0.5))",
+                  ? "radial-gradient(circle, rgba(248,113,113,0.2) 0%, transparent 70%)"
+                  : "radial-gradient(circle, rgba(212,175,55,0.15) 0%, transparent 70%)",
+                transition: "background 0.4s",
               }}
-            >
-              {/* Heads — front */}
-              <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}>
-                <img src={headsImg} alt="Heads" className="w-full h-full rounded-full object-cover" />
-              </div>
-              {/* Tails — back */}
-              <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
-                <img src={tailsImg} alt="Tails" className="w-full h-full rounded-full object-cover" />
-              </div>
-            </motion.div>
+            />
 
-            {/* Spin glow ring */}
-            <AnimatePresence>
-              {phase === "spinning" && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.15, 1] }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.8, repeat: Infinity }}
-                  style={{
-                    position: "absolute", inset: 0,
-                    boxShadow: "0 0 60px 20px rgba(212,175,55,0.35)",
-                    borderRadius: "50%",
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-            </AnimatePresence>
+            {/* The coin image — spins via scaleX */}
+            <motion.img
+              src={coinImg}
+              alt={displaySide}
+              animate={
+                phase === "spinning"
+                  ? {
+                      scaleX: spinKeyframes,
+                      filter: [
+                        "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
+                        "brightness(1.4) drop-shadow(0 0 30px rgba(212,175,55,1))",
+                        "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
+                      ],
+                    }
+                  : {
+                      scaleX: 1,
+                      filter:
+                        won === true
+                          ? "brightness(1.1) drop-shadow(0 0 24px rgba(74,222,128,0.7))"
+                          : won === false
+                          ? "brightness(0.9) drop-shadow(0 0 24px rgba(248,113,113,0.6))"
+                          : "brightness(1) drop-shadow(0 0 18px rgba(212,175,55,0.5))",
+                    }
+              }
+              transition={
+                phase === "spinning"
+                  ? {
+                      scaleX: { duration: SPIN_DURATION, ease: "linear" },
+                      filter: { duration: SPIN_DURATION, repeat: 0 },
+                    }
+                  : { duration: 0.35, ease: "easeOut" }
+              }
+              className="w-full h-full object-contain rounded-full"
+              style={{ display: "block" }}
+            />
           </div>
 
-          {/* Result label below coin */}
-          <div style={{ minHeight: 40 }}>
+          {/* Result label — appears below coin after landing */}
+          <div style={{ minHeight: 52 }} className="flex flex-col items-center justify-center">
             <AnimatePresence mode="wait">
               {phase === "result" && result && (
                 <motion.div
                   key={result}
-                  initial={{ opacity: 0, y: 8, scale: 0.9 }}
+                  initial={{ opacity: 0, y: 10, scale: 0.85 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
-                  transition={{ type: "spring", stiffness: 400, damping: 22, delay: 0.1 }}
+                  transition={{ type: "spring", stiffness: 380, damping: 22 }}
                   className="text-center"
                   data-testid="flip-result"
                 >
-                  <span
-                    className={`font-cinzel font-black text-2xl tracking-[0.3em] uppercase ${
+                  <div
+                    className={`font-cinzel font-black text-3xl tracking-[0.35em] uppercase ${
                       result === "heads" ? "text-yellow-300" : "text-purple-300"
                     }`}
                     style={{
-                      textShadow: result === "heads"
-                        ? "0 0 20px rgba(212,175,55,0.8)"
-                        : "0 0 20px rgba(160,80,255,0.8)",
+                      textShadow:
+                        result === "heads"
+                          ? "0 0 24px rgba(212,175,55,0.9), 0 0 48px rgba(212,175,55,0.4)"
+                          : "0 0 24px rgba(160,80,255,0.9), 0 0 48px rgba(160,80,255,0.4)",
                     }}
                   >
                     {result === "heads" ? "HEADS" : "TAILS"}
-                  </span>
-                  <div className={`text-xs font-cinzel tracking-widest mt-1 ${won ? "text-green-400" : "text-red-400"}`}>
-                    {won ? `+${betAmount.toLocaleString()} $CHOG` : `-${betAmount.toLocaleString()} $CHOG`}
                   </div>
+                </motion.div>
+              )}
+              {phase === "spinning" && (
+                <motion.div
+                  key="spinning"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: [0.4, 0.9, 0.4] }}
+                  transition={{ duration: 0.7, repeat: Infinity }}
+                  className="font-cinzel text-sm tracking-[0.3em] text-yellow-400/70 uppercase"
+                >
+                  Flipping…
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
         </div>
 
-        {/* Side selector */}
+        {/* Heads / Tails selector */}
         <div className="grid grid-cols-2 gap-3">
           {(["heads", "tails"] as Side[]).map((side) => (
             <motion.button
@@ -271,7 +270,11 @@ export default function CoinFlip() {
               } disabled:opacity-50`}
               data-testid={`button-choose-${side}`}
             >
-              <img src={side === "heads" ? headsImg : tailsImg} alt={side} className="w-8 h-8 rounded-full object-cover" />
+              <img
+                src={side === "heads" ? headsImg : tailsImg}
+                alt={side}
+                className="w-8 h-8 rounded-full object-cover"
+              />
               {side === "heads" ? "Heads" : "Tails"}
             </motion.button>
           ))}
@@ -316,7 +319,7 @@ export default function CoinFlip() {
           </div>
         </div>
 
-        {/* Primary action button */}
+        {/* Primary action */}
         {phase !== "result" ? (
           <motion.button
             whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
@@ -326,11 +329,7 @@ export default function CoinFlip() {
             className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-yellow-500 to-yellow-700 text-black neon-gold border border-yellow-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             data-testid="button-flip-coin"
           >
-            {phase === "spinning"
-              ? "Flipping..."
-              : balance <= 0
-              ? "Out of $CHOG"
-              : "Flip Coin"}
+            {phase === "spinning" ? "Flipping…" : balance <= 0 ? "Out of $CHOG" : "Flip Coin"}
           </motion.button>
         ) : (
           <motion.button
