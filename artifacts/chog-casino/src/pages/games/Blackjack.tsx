@@ -30,28 +30,56 @@ function handValue(cards: Card[]): number {
 
 function CardDisplay({ card, hidden, delay = 0 }: { card: Card; hidden?: boolean; delay?: number }) {
   const red = card.suit === "♥" || card.suit === "♦";
+  const ink = red ? "text-red-600" : "text-gray-900";
   return (
     <motion.div
-      initial={{ opacity: 0, y: -24, rotateY: 90 }}
-      animate={{ opacity: 1, y: 0, rotateY: 0 }}
-      transition={{ type: "spring", stiffness: 280, damping: 22, delay }}
-      className={`w-12 h-[4.25rem] sm:w-14 sm:h-20 rounded-lg border flex flex-col items-center justify-between p-1.5 font-bold select-none shadow-xl shrink-0 ${
-        hidden
-          ? "bg-gradient-to-br from-purple-900 to-purple-800 border-purple-500/40"
-          : "bg-gradient-to-b from-white to-gray-50 border-white/30"
-      }`}
+      className="w-12 h-[4.25rem] sm:w-14 sm:h-20 shrink-0 select-none"
+      style={{ perspective: 700 }}
+      // Deal in from the top, like off a dealer's deck, with a springy overshoot
+      initial={{ opacity: 0, y: -80, x: 26, rotate: 14, scale: 0.7 }}
+      animate={{ opacity: 1, y: 0, x: 0, rotate: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 260, damping: 17, delay }}
+      whileHover={{ y: -8, scale: 1.07, rotate: -1, transition: { type: "spring", stiffness: 400, damping: 18 } }}
     >
-      {hidden ? (
-        <div className="flex items-center justify-center w-full h-full">
-          <div className="w-6 h-6 rounded-sm bg-purple-600/40 border border-purple-400/30" />
+      <motion.div
+        className="relative w-full h-full"
+        style={{ transformStyle: "preserve-3d" }}
+        // Every card flips face-up as it's dealt; the dealer's hole card stays down until reveal
+        initial={{ rotateY: 180 }}
+        animate={{ rotateY: hidden ? 180 : 0 }}
+        transition={{ type: "spring", stiffness: 230, damping: 20, delay: delay + 0.12 }}
+      >
+        {/* Front (face) */}
+        <div
+          className="absolute inset-0 rounded-lg border border-black/10 bg-gradient-to-br from-white via-white to-gray-200 shadow-xl overflow-hidden"
+          style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}
+        >
+          <div className="absolute top-1 left-1.5 flex flex-col items-center leading-none">
+            <span className={`text-[11px] font-black ${ink}`}>{card.value}</span>
+            <span className={`text-[9px] ${ink}`}>{card.suit}</span>
+          </div>
+          <span className={`absolute inset-0 flex items-center justify-center text-2xl ${red ? "text-red-500/90" : "text-gray-800/90"}`}>
+            {card.suit}
+          </span>
+          <div className="absolute bottom-1 right-1.5 flex flex-col items-center leading-none rotate-180">
+            <span className={`text-[11px] font-black ${ink}`}>{card.value}</span>
+            <span className={`text-[9px] ${ink}`}>{card.suit}</span>
+          </div>
+          {/* glossy sheen */}
+          <div className="absolute -inset-y-2 -left-4 w-5 rotate-12 bg-white/40 blur-[3px] pointer-events-none" />
         </div>
-      ) : (
-        <>
-          <span className={`self-start text-[11px] leading-none font-black ${red ? "text-red-600" : "text-gray-900"}`}>{card.value}</span>
-          <span className={`text-lg leading-none ${red ? "text-red-500" : "text-gray-800"}`}>{card.suit}</span>
-          <span className={`self-end text-[11px] leading-none font-black rotate-180 ${red ? "text-red-600" : "text-gray-900"}`}>{card.value}</span>
-        </>
-      )}
+
+        {/* Back (face-down) */}
+        <div
+          className="absolute inset-0 rounded-lg border border-purple-400/40 bg-gradient-to-br from-purple-700 via-purple-900 to-[#1a0b2e] shadow-xl flex items-center justify-center overflow-hidden"
+          style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+        >
+          <div className="absolute inset-1 rounded-md border border-purple-400/25" />
+          <div className="w-7 h-7 rounded-full border-2 border-yellow-400/50 flex items-center justify-center">
+            <div className="w-3 h-3 rotate-45 bg-gradient-to-br from-yellow-300/70 to-yellow-500/40" />
+          </div>
+        </div>
+      </motion.div>
     </motion.div>
   );
 }
