@@ -208,6 +208,8 @@ export default function Aviator() {
 
   const multiplierRef = useRef(1.0);
   const betPlacedRef = useRef(false);
+  const cashedOutRef = useRef(false);
+  const [cashedOut, setCashedOut] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -235,20 +237,18 @@ export default function Aviator() {
   }, []);
 
   const cashOut = useCallback(() => {
-    if (phase !== "flying" || !betPlacedRef.current) return;
-    clearTimers();
+    // Cashing out only locks in winnings — the plane keeps flying until it crashes.
+    if (phase !== "flying" || !betPlacedRef.current || cashedOutRef.current) return;
     const payout = Math.round(bet * multiplierRef.current);
     updateBalance((b) => b + payout);
-    setPhase("cashed");
+    cashedOutRef.current = true;
+    setCashedOut(true);
     playCashoutSound();
     setResultMsg({
       text: `Cashed out at ${multiplierRef.current.toFixed(2)}×  +${payout.toLocaleString()} ${currencyLabel}`,
       cls: "text-green-400",
     });
-    timerRef.current = setTimeout(() => {
-      startBettingRef.current?.();
-    }, WAITING_DURATION);
-  }, [phase, bet, clearTimers, updateBalance, currencyLabel]);
+  }, [phase, bet, updateBalance, currencyLabel]);
 
   cashOutRef.current = cashOut;
 
@@ -272,11 +272,14 @@ export default function Aviator() {
           setPhase("crashed");
           playCrashSound();
           setHistory((prev) => [cp, ...prev].slice(0, MAX_HISTORY));
-          setResultMsg(
-            betPlacedRef.current
-              ? { text: `CRASHED at ${cp.toFixed(2)}×  — You lost!`, cls: "text-red-400" }
-              : { text: `Crashed at ${cp.toFixed(2)}×`, cls: "text-red-400" },
-          );
+          // Don't overwrite the green "cashed out" message if the player already secured a win.
+          if (!cashedOutRef.current) {
+            setResultMsg(
+              betPlacedRef.current
+                ? { text: `CRASHED at ${cp.toFixed(2)}×  — You lost!`, cls: "text-red-400" }
+                : { text: `Crashed at ${cp.toFixed(2)}×`, cls: "text-red-400" },
+            );
+          }
           rafRef.current = null;
           timerRef.current = setTimeout(() => startBettingRef.current?.(), WAITING_DURATION);
           return;
@@ -288,8 +291,7 @@ export default function Aviator() {
 
         if (!autoCashed && betPlacedRef.current && autoCashOut && raw >= autoCashOutMult) {
           autoCashed = true;
-          cashOutRef.current?.();
-          return;
+          cashOutRef.current?.(); // locks in winnings but the flight continues
         }
 
         rafRef.current = requestAnimationFrame(loop);
@@ -311,6 +313,8 @@ export default function Aviator() {
       multiplierRef.current = 1.0;
       betPlacedRef.current = false;
       setBetPlaced(false);
+      cashedOutRef.current = false;
+      setCashedOut(false);
       setResultMsg(null);
       setPhase("betting");
       setCountdown(Math.ceil(BETTING_DURATION / 1000));
@@ -677,7 +681,14 @@ export default function Aviator() {
           )}
 
           {/* Action buttons */}
-          {gated ? null : phase === "flying" && betPlaced ? (
+          {gated ? null : phase === "flying" && betPlaced && cashedOut ? (
+            <div
+              className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase text-center bg-gradient-to-r from-green-900 to-green-800 text-green-300 border border-green-500/40"
+              data-testid="button-cashed-out"
+            >
+              Cashed Out ✓
+            </div>
+          ) : phase === "flying" && betPlaced ? (
             <motion.button
               whileHover={{ scale: 1.03, y: -2 }}
               whileTap={{ scale: 0.97 }}
