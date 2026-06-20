@@ -92,7 +92,7 @@ function startEngineSound() {
 
 function updateEngineSound(multiplier: number) {
   if (!_engine || !_ctx) return;
-  const f = 180 + Math.min(multiplier, 25) * 55; // pitch rises with the multiplier
+  const f = 180 + Math.min(multiplier, 25) * 55;
   _engine.osc.frequency.setTargetAtTime(f, _ctx.currentTime, 0.05);
   _engine.sub.frequency.setTargetAtTime(f / 2, _ctx.currentTime, 0.05);
 }
@@ -131,7 +131,6 @@ function playCrashSound() {
 }
 
 function playCashoutSound() {
-  stopEngineSound();
   if (_muted) return;
   const ctx = audioCtx();
   if (!ctx) return;
@@ -189,11 +188,20 @@ export default function Aviator() {
   const [betPlaced, setBetPlaced] = useState(false);
   const [muted, setMuted] = useState(false);
 
+  const phaseRef = useRef<Phase>(phase);
+  phaseRef.current = phase;
+
   const toggleMute = useCallback(() => {
     setMuted((m) => {
       _muted = !m;
-      if (_muted) stopEngineSound();
-      else audioCtx(); // resume on unmute (counts as a user gesture)
+      if (_muted) {
+        stopEngineSound();
+      } else {
+        const ctx = audioCtx();
+        if (ctx && phaseRef.current === "flying") {
+          startEngineSound();
+        }
+      }
       return !m;
     });
   }, []);

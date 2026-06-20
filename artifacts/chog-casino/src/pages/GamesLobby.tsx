@@ -118,14 +118,6 @@ function GameCard({ game, index }: { game: Game; index: number }) {
           <h3 className="font-cinzel font-black text-3xl text-white tracking-wider mb-1 drop-shadow-lg">
             {game.name}
           </h3>
-          <div className="flex items-center justify-end mt-3">
-            <motion.div
-              animate={{ x: hovered ? 4 : 0 }}
-              className="px-5 py-2.5 rounded-xl font-cinzel font-bold text-xs tracking-[0.15em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white border border-purple-400/30 neon-purple"
-            >
-              Play Now
-            </motion.div>
-          </div>
         </div>
       </div>
 
