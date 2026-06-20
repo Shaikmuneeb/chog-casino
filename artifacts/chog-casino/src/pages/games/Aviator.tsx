@@ -130,6 +130,24 @@ function playCrashSound() {
   osc.stop(ctx.currentTime + 0.55);
 }
 
+function playCountdownTick(secondsLeft: number) {
+  if (_muted) return;
+  const ctx = audioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = secondsLeft <= 1 ? 1100 : 760;
+  const start = ctx.currentTime;
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(0.14, start + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.14);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(start);
+  osc.stop(start + 0.15);
+}
+
 function playCashoutSound() {
   if (_muted) return;
   const ctx = audioCtx();
@@ -329,9 +347,13 @@ export default function Aviator() {
 
       let remaining = BETTING_DURATION;
       const tickMs = 100;
+      let lastSecond = Math.ceil(remaining / 1000);
       const countdownTick = setInterval(() => {
         remaining -= tickMs;
-        setCountdown(Math.max(0, Math.ceil(remaining / 1000)));
+        const second = Math.max(0, Math.ceil(remaining / 1000));
+        setCountdown(second);
+        if (second !== lastSecond && second > 0) playCountdownTick(second);
+        lastSecond = second;
       }, tickMs);
 
       if (autoBet && !gated && bet > 0 && bet <= balance) {
