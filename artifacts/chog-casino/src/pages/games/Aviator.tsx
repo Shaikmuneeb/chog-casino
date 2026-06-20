@@ -50,7 +50,6 @@ async function computeCrashPoint(seed: string): Promise<number> {
 const BETTING_DURATION = 5000;
 const WAITING_DURATION = 3000;
 const MAX_HISTORY = 15;
-const TICK_INTERVAL = 80;
 
 function getMultiplierColor(m: number): string {
   if (m >= 3) return "text-green-400";
@@ -67,8 +66,6 @@ function getMultiplierBg(m: number): string {
 }
 
 type Phase = "waiting" | "betting" | "flying" | "crashed" | "cashed";
-
-const TRAIL_COUNT = 5;
 
 export default function Aviator() {
   const [bet, setBet] = useState(100);
@@ -91,8 +88,10 @@ export default function Aviator() {
   const [betPlaced, setBetPlaced] = useState(false);
 
   const multiplierRef = useRef(1.0);
+  const betPlacedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const canPlaceBet =
     (phase === "waiting" || phase === "betting") && !gated && bet > 0 && bet <= balance;
@@ -106,6 +105,10 @@ export default function Aviator() {
       clearInterval(tickRef.current);
       tickRef.current = null;
     }
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
   }, []);
 
   const startBetting = useCallback(
@@ -116,6 +119,7 @@ export default function Aviator() {
       setCrashPoint(cp);
       setMultiplier(1.0);
       multiplierRef.current = 1.0;
+      betPlacedRef.current = false;
       setBetPlaced(false);
       setResultMsg(null);
       setPhase("betting");
@@ -144,31 +148,35 @@ export default function Aviator() {
       setCountdown(0);
       multiplierRef.current = 1.0;
       setMultiplier(1.0);
-      const startTime = Date.now();
+      const startTime = performance.now();
 
-      tickRef.current = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        const newMult = Math.max(1.0, parseFloat((Math.pow(Math.E, elapsed * 0.18)).toFixed(2)));
-        multiplierRef.current = newMult;
-        setMultiplier(newMult);
+      // 60fps loop — buttery-smooth multiplier + plane, like a real crash game.
+      const loop = (now: number) => {
+        const elapsed = (now - startTime) / 1000;
+        const raw = Math.pow(Math.E, elapsed * 0.18);
 
-        if (newMult >= cp) {
-          clearTimers();
-          setPhase("crashed");
+        if (raw >= cp) {
+          multiplierRef.current = cp;
           setMultiplier(cp);
+          setPhase("crashed");
           setHistory((prev) => [cp, ...prev].slice(0, MAX_HISTORY));
-          if (betPlaced) {
-            setResultMsg({ text: `CRASHED at ${cp.toFixed(2)}×  — You lost!`, cls: "text-red-400" });
-          } else {
-            setResultMsg({ text: `Crashed at ${cp.toFixed(2)}×`, cls: "text-red-400" });
-          }
-          timerRef.current = setTimeout(() => {
-            startBetting();
-          }, WAITING_DURATION);
+          setResultMsg(
+            betPlacedRef.current
+              ? { text: `CRASHED at ${cp.toFixed(2)}×  — You lost!`, cls: "text-red-400" }
+              : { text: `Crashed at ${cp.toFixed(2)}×`, cls: "text-red-400" },
+          );
+          rafRef.current = null;
+          timerRef.current = setTimeout(() => startBetting(), WAITING_DURATION);
+          return;
         }
-      }, TICK_INTERVAL);
+
+        multiplierRef.current = raw;
+        setMultiplier(raw);
+        rafRef.current = requestAnimationFrame(loop);
+      };
+      rafRef.current = requestAnimationFrame(loop);
     },
-    [betPlaced, clearTimers, startBetting],
+    [startBetting],
   );
 
   useEffect(() => {
@@ -179,6 +187,7 @@ export default function Aviator() {
   const placeBet = useCallback(() => {
     if (!canPlaceBet || betPlaced) return;
     updateBalance((b) => b - bet);
+    betPlacedRef.current = true;
     setBetPlaced(true);
   }, [canPlaceBet, betPlaced, bet, updateBalance]);
 
@@ -197,15 +206,15 @@ export default function Aviator() {
     }, WAITING_DURATION);
   }, [phase, betPlaced, bet, clearTimers, updateBalance, currencyLabel, startBetting]);
 
-  // Plane position along a curved flight path based on multiplier progress
-  const progress = Math.min((multiplier - 1) / (Math.max(crashPoint, 2) - 1), 1);
-  // Curved path: start bottom-left, arc upward to top-right
-  const planeLeft = 5 + progress * 75; // 5% → 80%
-  const planeBottom = 8 + progress * 72 - Math.sin(progress * Math.PI) * 12; // arc: rises then levels
-  // Nose-up tilt: starts at -15deg, steepens as it climbs
-  const planeRotation = -15 - progress * 30;
-
   const showPlane = phase === "flying" || phase === "cashed";
+
+  // Climb is driven purely by the LIVE multiplier (not the hidden crash point), so the
+  // plane always takes off, arcs up quickly, then hovers near the top — like real Aviator.
+  // 1x → 0, 2x → 0.57, 3x → 0.81, 5x → 0.97, then asymptotes toward the hover zone.
+  const climb = showPlane ? 1 - Math.exp(-0.85 * (multiplier - 1)) : 0;
+  const planeLeft = 8 + climb * 60; // 8% → 68%
+  const planeBottom = 14 + climb * 50; // 14% → 64%
+  const planeRotation = -6 - climb * 16; // nose-up: -6° → -22°
 
   return (
     <GameLayout
@@ -263,7 +272,7 @@ export default function Aviator() {
             <div className="text-center mb-4">
               <AnimatePresence mode="wait">
                 <motion.div
-                  key={`${phase}-${multiplier}`}
+                  key={phase === "flying" ? "flying" : `${phase}-${countdown}`}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
@@ -312,139 +321,40 @@ export default function Aviator() {
               style={{ height: 260 }}
               data-testid="aviator-flight-area"
             >
-              {/* SVG flight path curve */}
-              <svg
-                viewBox="0 0 400 260"
-                className="absolute inset-0 w-full h-full"
-                data-testid="aviator-flight-path"
-              >
-                <defs>
-                  <linearGradient id="flightGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#6366f1" />
-                    <stop offset="100%" stopColor={phase === "crashed" ? "#ef4444" : "#22d3ee"} />
-                  </linearGradient>
-                </defs>
-                {/* Grid lines */}
-                {[0.25, 0.5, 0.75].map((y) => (
-                  <line
-                    key={y}
-                    x1={30}
-                    y1={260 * y}
-                    x2={370}
-                    y2={260 * y}
-                    stroke="rgba(168,85,247,0.06)"
-                    strokeWidth={1}
-                  />
-                ))}
-              </svg>
-
-              {/* Trail copies of the plane */}
-              {showPlane &&
-                Array.from({ length: TRAIL_COUNT }).map((_, i) => {
-                  const trailProgress = Math.max(0, progress - (i + 1) * 0.04);
-                  const tLeft = 5 + trailProgress * 75;
-                  const tBottom = 8 + trailProgress * 72 - Math.sin(trailProgress * Math.PI) * 12;
-                  const tRotation = -15 - trailProgress * 30;
-                  return (
-                    <img
-                      key={`trail-${i}`}
-                      src={aviatorPlane}
-                      alt=""
-                      aria-hidden
-                      className="absolute pointer-events-none"
-                      style={{
-                        width: 80,
-                        height: "auto",
-                        left: `${tLeft}%`,
-                        bottom: `${tBottom}%`,
-                        transform: `rotate(${tRotation}deg) translateX(-50%) translateY(50%)`,
-                        opacity: 0.35 - i * 0.06,
-                        filter: `blur(${1 + i * 0.5}px) brightness(0.7)`,
-                      }}
-                    />
-                  );
-                })}
-
-              {/* Main plane image — always rendered so AnimatePresence can animate exit */}
-              <motion.img
-                key="main-plane"
-                src={aviatorPlane}
-                alt="Aviator plane"
+              {/* Single clean plane: climbs with the multiplier, hovers and bobs, flies off on crash */}
+              <motion.div
                 className="absolute z-10"
-                style={{ width: 90, height: "auto" }}
-                initial={{ left: "5%", bottom: "8%", opacity: 0, scale: 0.6 }}
+                initial={{ left: "8%", bottom: "14%", opacity: 0, scale: 0.5, rotate: -6, x: "-50%", y: "50%" }}
                 animate={
                   phase === "crashed"
-                    ? {
-                        left: "110%",
-                        bottom: "90%",
-                        opacity: 0,
-                        scale: 0.2,
-                        rotate: -60,
-                        x: "-50%",
-                        y: "50%",
-                      }
+                    ? { left: "118%", bottom: "98%", opacity: 0, scale: 0.25, rotate: -55, x: "-50%", y: "50%" }
                     : showPlane
-                    ? {
-                        left: `${planeLeft}%`,
-                        bottom: `${planeBottom}%`,
-                        opacity: 1,
-                        scale: 1,
-                        rotate: planeRotation,
-                        x: "-50%",
-                        y: "50%",
-                      }
-                    : {
-                        left: "5%",
-                        bottom: "8%",
-                        opacity: 0,
-                        scale: 0.6,
-                        rotate: -15,
-                        x: "-50%",
-                        y: "50%",
-                      }
+                    ? { left: `${planeLeft}%`, bottom: `${planeBottom}%`, opacity: 1, scale: 1, rotate: planeRotation, x: "-50%", y: "50%" }
+                    : { left: "8%", bottom: "14%", opacity: 0, scale: 0.5, rotate: -6, x: "-50%", y: "50%" }
                 }
                 transition={
                   phase === "crashed"
-                    ? { duration: 0.5, ease: "easeIn" }
+                    ? { duration: 0.55, ease: "easeIn" }
                     : {
-                        left: { duration: 0.08, ease: "linear" },
-                        bottom: { duration: 0.08, ease: "linear" },
-                        rotate: { duration: 0.08, ease: "linear" },
+                        left: { duration: 0.15, ease: "linear" },
+                        bottom: { duration: 0.15, ease: "linear" },
+                        rotate: { duration: 0.2, ease: "linear" },
                         opacity: { duration: 0.3 },
                         scale: { duration: 0.3 },
                       }
                 }
-                data-testid="aviator-plane"
-              />
-
-              {/* Bob/wobble overlay on the plane during flight */}
-              {phase === "flying" && (
+              >
+                {/* Gentle hover bob on top of the climb */}
                 <motion.img
                   src={aviatorPlane}
-                  alt=""
-                  aria-hidden
-                  className="absolute z-10 pointer-events-none"
-                  style={{ width: 90, height: "auto" }}
-                  animate={{
-                    left: `${planeLeft}%`,
-                    bottom: `${planeBottom}%`,
-                    y: [0, -4, 0, 4, 0],
-                    opacity: [0.15, 0.25, 0.15],
-                    rotate: planeRotation,
-                    x: "-50%",
-                    scale: [0.98, 1.02, 0.98],
-                  }}
-                  transition={{
-                    y: { duration: 0.5, repeat: Infinity, ease: "easeInOut" },
-                    opacity: { duration: 0.5, repeat: Infinity, ease: "easeInOut" },
-                    left: { duration: 0.08, ease: "linear" },
-                    bottom: { duration: 0.08, ease: "linear" },
-                    rotate: { duration: 0.08, ease: "linear" },
-                    scale: { duration: 0.5, repeat: Infinity, ease: "easeInOut" },
-                  }}
+                  alt="Aviator plane"
+                  data-testid="aviator-plane"
+                  className="drop-shadow-[0_0_22px_rgba(168,85,247,0.55)]"
+                  style={{ width: 96, height: "auto", display: "block" }}
+                  animate={phase === "flying" ? { y: [0, -6, 0, 6, 0] } : { y: 0 }}
+                  transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
                 />
-              )}
+              </motion.div>
 
               {/* Crash explosion effect */}
               <AnimatePresence>
