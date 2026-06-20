@@ -10,6 +10,7 @@ import minesBg from "@assets/image_1781811958820.png";
 import rouletteBg from "@assets/image_1781811963908.png";
 import blackjackBg from "@assets/image_1781811969584.png";
 import aviatorBanner from "@assets/aviator/aviator-banner.png";
+import diceBanner from "@assets/dice/dice-cover.png";
 
 interface Game {
   id: string;
@@ -78,6 +79,17 @@ const games: Game[] = [
     borderColor: "border-cyan-500/30 hover:border-cyan-400/60",
     glowColor: "hover:shadow-[0_0_40px_rgba(34,211,238,0.35)]",
     bgImage: aviatorBanner,
+  },
+  {
+    id: "dice",
+    name: "Dice",
+    emoji: "🎲",
+    multiplier: "Up to 49x",
+    tag: "NEW",
+    tagColor: "bg-cyan-500/20 text-cyan-300 border-cyan-500/40",
+    borderColor: "border-cyan-500/30 hover:border-cyan-400/60",
+    glowColor: "hover:shadow-[0_0_40px_rgba(34,211,238,0.35)]",
+    bgImage: diceBanner,
   },
 ];
 
@@ -169,11 +181,11 @@ export default function GamesLobby() {
               Choose Your <span className="gradient-purple-gold">Game</span>
             </h1>
             <p className="text-purple-300/50 tracking-widest text-sm uppercase">
-              Five legendary games · Powered by $CHOG
+              Six legendary games · Powered by $CHOG
             </p>
           </motion.div>
 
-          <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6" data-testid="lobby-grid">
+          <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="lobby-grid">
             {games.map((game, i) => (
               <GameCard key={game.id} game={game} index={i} />
             ))}

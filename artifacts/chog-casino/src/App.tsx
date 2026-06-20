@@ -11,6 +11,7 @@ import Mines from "@/pages/games/Mines";
 import Roulette from "@/pages/games/Roulette";
 import Blackjack from "@/pages/games/Blackjack";
 import Aviator from "@/pages/games/Aviator";
+import Dice from "@/pages/games/Dice";
 import Profile from "@/pages/Profile";
 import { monad } from "@/chains";
 import { GameModeProvider } from "@/context/GameModeContext";
@@ -28,6 +29,7 @@ function Router() {
       <Route path="/games/roulette" component={Roulette} />
       <Route path="/games/blackjack" component={Blackjack} />
       <Route path="/games/aviator" component={Aviator} />
+      <Route path="/games/dice" component={Dice} />
       <Route path="/profile" component={Profile} />
       <Route component={NotFound} />
     </Switch>
