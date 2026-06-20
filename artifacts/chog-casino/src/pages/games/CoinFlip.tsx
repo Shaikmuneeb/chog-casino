@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
@@ -78,11 +78,16 @@ export default function CoinFlip() {
   const [result, setResult] = useState<Side | null>(null);
   const [won, setWon] = useState<boolean | null>(null);
   const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
-  // which image to show — starts as heads, swaps to result image just before last flip ends
+  // which image to show — alternates heads/tails on every flip so both faces are seen mid-spin
   const [displaySide, setDisplaySide] = useState<Side>("heads");
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const betAmount = bet;
   const canFlip = phase === "idle" && !gated && betAmount > 0 && betAmount <= balance;
+
+  useEffect(() => {
+    return () => timersRef.current.forEach(clearTimeout);
+  }, []);
 
   const flip = useCallback(() => {
     if (!canFlip) return;
@@ -93,22 +98,32 @@ export default function CoinFlip() {
     setPhase("spinning");
     setResult(null);
     setWon(null);
-    setDisplaySide("heads"); // show heads during spin — doesn't matter, it's flipping fast
+    setDisplaySide("heads");
     playSpin();
 
-    // Swap to the correct image at the midpoint of the last flip (coin is edge-on → invisible)
-    setTimeout(() => {
-      setDisplaySide(outcome);
-    }, (SPIN_DURATION - 0.12) * 1000);
+    // The coin is edge-on (invisible) at every odd keyframe — swap the face shown at each
+    // of those moments so the spin visibly alternates heads/tails, landing on the real outcome.
+    const unitMs = (SPIN_DURATION * 1000) / (FLIPS * 2);
+    for (let i = 1; i <= FLIPS; i++) {
+      const t = (2 * i - 1) * unitMs;
+      const isLast = i === FLIPS;
+      timersRef.current.push(
+        setTimeout(() => {
+          setDisplaySide(isLast ? outcome : (prev) => (prev === "heads" ? "tails" : "heads"));
+        }, t),
+      );
+    }
 
     // Reveal result
-    setTimeout(() => {
-      setResult(outcome);
-      setWon(didWin);
-      updateBalance((b) => didWin ? b + betAmount : b - betAmount);
-      setPhase("result");
-      didWin ? playWin() : playLose();
-    }, SPIN_DURATION * 1000);
+    timersRef.current.push(
+      setTimeout(() => {
+        setResult(outcome);
+        setWon(didWin);
+        updateBalance((b) => didWin ? b + betAmount : b - betAmount);
+        setPhase("result");
+        didWin ? playWin() : playLose();
+      }, SPIN_DURATION * 1000),
+    );
   }, [canFlip, choice, betAmount, updateBalance]);
 
   const reset = () => {
