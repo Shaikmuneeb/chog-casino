@@ -336,18 +336,6 @@ export default function Aviator() {
                     strokeWidth={1}
                   />
                 ))}
-                {/* Flight path curve */}
-                <motion.path
-                  d={`M 30 230 Q ${30 + progress * 180} ${230 - progress * 220} ${30 + progress * 340} ${230 - progress * 200 - Math.sin(progress * Math.PI) * 35}`}
-                  fill="none"
-                  stroke="url(#flightGradient)"
-                  strokeWidth={2.5}
-                  strokeLinecap="round"
-                  strokeDasharray="6 4"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 0.1 }}
-                />
               </svg>
 
               {/* Trail copies of the plane */}
