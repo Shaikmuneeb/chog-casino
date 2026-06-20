@@ -1,10 +1,87 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
 import WalletGateNotice from "@/components/WalletGateNotice";
 import { useGameBalance } from "@/hooks/useGameBalance";
 import bgImage from "@assets/image_1781811963908.png";
+
+// ── Web Audio: spinning whoosh, slowing ball ticks, and a win/lose chime ───────
+let _rouletteCtx: AudioContext | null = null;
+
+function rouletteCtx(): AudioContext | null {
+  try {
+    if (!_rouletteCtx) {
+      _rouletteCtx = new (window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    }
+    if (_rouletteCtx.state === "suspended") _rouletteCtx.resume();
+    return _rouletteCtx;
+  } catch {
+    return null;
+  }
+}
+
+function playSpinWhoosh(durationSec: number) {
+  const ctx = rouletteCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(440, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + durationSec);
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.045, ctx.currentTime + 0.3);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationSec);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + durationSec + 0.05);
+}
+
+function playTick() {
+  const ctx = rouletteCtx();
+  if (!ctx) return;
+  const duration = 0.03;
+  const bufferSize = Math.floor(ctx.sampleRate * duration);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.value = 2200;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.28, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(ctx.destination);
+  noise.start();
+}
+
+function playResultChime(won: boolean) {
+  const ctx = rouletteCtx();
+  if (!ctx) return;
+  const notes = won ? [523, 659, 784, 1047] : [330, 247];
+  notes.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = won ? "sine" : "sawtooth";
+    osc.frequency.value = freq;
+    const start = ctx.currentTime + i * 0.12;
+    gain.gain.setValueAtTime(0.14, start);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + 0.4);
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 type BetType = "red" | "black" | "green" | "odd" | "even" | "1-18" | "19-36" | number;
 
@@ -75,8 +152,13 @@ export default function Roulette() {
   const [winAmount, setWinAmount] = useState<number | null>(null);
   const [rotation, setRotation] = useState(0);
   const [showNumbers, setShowNumbers] = useState(false);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const canSpin = !spinning && !gated && bet > 0 && bet <= balance;
+
+  useEffect(() => {
+    return () => timersRef.current.forEach(clearTimeout);
+  }, []);
 
   const spin = () => {
     if (!canSpin) return;
@@ -84,6 +166,15 @@ export default function Roulette() {
     setResult(null);
     setWinAmount(null);
     updateBalance(b => b - bet);
+
+    const SPIN_MS = 2300;
+    playSpinWhoosh(SPIN_MS / 1000);
+    // Ball clicks past each pocket — closely spaced while fast, spreading out as it slows.
+    const totalTicks = 28;
+    for (let i = 0; i < totalTicks; i++) {
+      const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
+      timersRef.current.push(setTimeout(playTick, t));
+    }
 
     const outcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
     const slotIndex = WHEEL_ORDER.indexOf(outcome);
@@ -96,14 +187,15 @@ export default function Roulette() {
       return prev + fullSpins * 360 + delta;
     });
 
-    setTimeout(() => {
+    timersRef.current.push(setTimeout(() => {
       const won = checkWin(outcome, betType);
       const payout = won ? bet * getMultiplier(betType) : 0;
       setResult(outcome);
       setWinAmount(won ? payout : -bet);
       if (won) updateBalance(b => b + payout);
       setSpinning(false);
-    }, 2300);
+      playResultChime(won);
+    }, SPIN_MS));
   };
 
   const resultColor = result !== null ? getColor(result) : null;
