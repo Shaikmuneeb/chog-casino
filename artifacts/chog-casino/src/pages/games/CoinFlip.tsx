@@ -83,7 +83,7 @@ export default function CoinFlip() {
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const betAmount = bet;
-  const canFlip = phase === "idle" && !gated && betAmount > 0 && betAmount <= balance;
+  const canFlip = phase !== "spinning" && !gated && betAmount > 0 && betAmount <= balance;
 
   useEffect(() => {
     return () => timersRef.current.forEach(clearTimeout);
@@ -125,13 +125,6 @@ export default function CoinFlip() {
       }, SPIN_DURATION * 1000),
     );
   }, [canFlip, choice, betAmount, updateBalance]);
-
-  const reset = () => {
-    setPhase("idle");
-    setResult(null);
-    setWon(null);
-    setDisplaySide("heads");
-  };
 
   const coinImg = displaySide === "heads" ? headsImg : tailsImg;
 
@@ -278,10 +271,10 @@ export default function CoinFlip() {
           {(["heads", "tails"] as Side[]).map((side) => (
             <motion.button
               key={side}
-              whileHover={phase === "idle" ? { scale: 1.04, y: -1 } : {}}
-              whileTap={phase === "idle" ? { scale: 0.96 } : {}}
-              onClick={() => phase === "idle" && setChoice(side)}
-              disabled={phase !== "idle"}
+              whileHover={phase !== "spinning" ? { scale: 1.04, y: -1 } : {}}
+              whileTap={phase !== "spinning" ? { scale: 0.96 } : {}}
+              onClick={() => phase !== "spinning" && setChoice(side)}
+              disabled={phase === "spinning"}
               className={`flex items-center justify-center gap-3 py-3 px-4 rounded-xl font-cinzel font-bold text-sm tracking-[0.12em] uppercase border transition-all duration-200 ${
                 choice === side
                   ? "bg-yellow-500/20 border-yellow-400/60 text-yellow-300 neon-gold"
@@ -300,13 +293,13 @@ export default function CoinFlip() {
         </div>
 
         {/* Bet controls */}
-        <BetControls value={bet} onChange={setBet} max={balance} disabled={phase !== "idle"} />
+        <BetControls value={bet} onChange={setBet} max={balance} disabled={phase === "spinning"} />
 
         {/* Real mode: connect wallet / deposit gate */}
         {gated && <WalletGateNotice reason={gateReason} />}
 
         {/* Primary action */}
-        {gated ? null : phase !== "result" ? (
+        {!gated && (
           <motion.button
             whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
             whileTap={canFlip ? { scale: 0.97 } : {}}
@@ -315,23 +308,11 @@ export default function CoinFlip() {
             className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-yellow-500 to-yellow-700 text-black neon-gold border border-yellow-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             data-testid="button-flip-coin"
           >
-            {phase === "spinning" ? "Flipping…" : balance <= 0 ? `Out of ${currencyLabel}` : "Flip Coin"}
-          </motion.button>
-        ) : (
-          <motion.button
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            whileHover={{ scale: 1.03, y: -2 }}
-            whileTap={{ scale: 0.97 }}
-            onClick={reset}
-            className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 transition-all"
-            data-testid="button-flip-again"
-          >
-            Flip Again
+            {phase === "spinning" ? "Flipping…" : balance <= 0 ? `Out of ${currencyLabel}` : "Bet"}
           </motion.button>
         )}
 
-        {balance <= 0 && phase === "idle" && !gated && (
+        {balance <= 0 && phase !== "spinning" && !gated && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
