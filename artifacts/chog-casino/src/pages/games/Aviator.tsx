@@ -203,6 +203,8 @@ export default function Aviator() {
   const [autoBet, setAutoBet] = useState(false);
   const [autoCashOut, setAutoCashOut] = useState(false);
   const [autoCashOutMult, setAutoCashOutMult] = useState(1.1);
+  // Raw text so the field can be typed/cleared freely; committed & clamped on blur.
+  const [autoCashOutInput, setAutoCashOutInput] = useState("1.10");
 
   const multiplierRef = useRef(1.0);
   const betPlacedRef = useRef(false);
@@ -636,10 +638,18 @@ export default function Aviator() {
                       <div className="flex items-center gap-1 glass border border-cyan-500/30 rounded-lg px-2 py-1">
                         <input
                           type="number"
-                          value={autoCashOutMult}
+                          value={autoCashOutInput}
                           onChange={(e) => {
+                            setAutoCashOutInput(e.target.value);
                             const v = parseFloat(e.target.value);
                             if (!isNaN(v) && v >= 1.01) setAutoCashOutMult(parseFloat(v.toFixed(2)));
+                          }}
+                          onBlur={() => {
+                            let v = parseFloat(autoCashOutInput);
+                            if (isNaN(v) || v < 1.01) v = 1.01;
+                            v = parseFloat(v.toFixed(2));
+                            setAutoCashOutMult(v);
+                            setAutoCashOutInput(v.toFixed(2));
                           }}
                           step={0.1}
                           min={1.01}
