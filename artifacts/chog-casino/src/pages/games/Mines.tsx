@@ -319,7 +319,7 @@ export default function Mines() {
                 className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                 data-testid="button-start-mines"
               >
-                {balance <= 0 ? `Out of ${currencyLabel}` : gameState === "idle" ? "Place Bet & Start" : "Play Again"}
+                {balance <= 0 ? `Out of ${currencyLabel}` : "Place Bet & Start"}
               </motion.button>
               {balance <= 0 && (
                 <motion.button
