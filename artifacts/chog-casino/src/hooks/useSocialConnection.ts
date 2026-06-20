@@ -7,7 +7,6 @@ import {
   clearConnection,
   handleOAuthRedirect,
   startXLogin,
-  startDiscordLogin,
 } from "@/lib/socialAuth";
 
 // Process the OAuth redirect only once per page load, no matter how many components use the hook.
@@ -45,17 +44,7 @@ export function useSocialConnection() {
     }
   };
 
-  const connectDiscord = () => {
-    setConnecting("discord");
-    try {
-      startDiscordLogin();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to connect Discord.");
-      setConnecting(null);
-    }
-  };
-
   const disconnect = () => clearConnection();
 
-  return { connection, connecting, connectX, connectDiscord, disconnect };
+  return { connection, connecting, connectX, disconnect };
 }

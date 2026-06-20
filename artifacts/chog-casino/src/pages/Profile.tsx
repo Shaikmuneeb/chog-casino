@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
-import { ArrowLeft, Twitter, MessageCircle, CheckCircle2, LogOut, Loader2, Wallet, Camera, Check } from "lucide-react";
+import { ArrowLeft, Twitter, CheckCircle2, LogOut, Loader2, Wallet, Camera, Check } from "lucide-react";
 import ConnectButton from "@/components/ConnectButton";
 import { useWallet } from "@/hooks/useWallet";
 import ParticlesBg from "@/components/ParticlesBg";
@@ -30,20 +30,12 @@ const SOCIALS: SocialOption[] = [
     iconColor: "text-blue-400",
     ring: "hover:border-blue-400/50 hover:shadow-[0_0_24px_rgba(96,165,250,0.25)]",
   },
-  {
-    provider: "discord",
-    label: "Connect Discord",
-    description: "Link your Discord account to your Chog profile.",
-    icon: MessageCircle,
-    iconColor: "text-indigo-400",
-    ring: "hover:border-indigo-400/50 hover:shadow-[0_0_24px_rgba(129,140,248,0.25)]",
-  },
 ];
 
 export default function Profile() {
   const [, setLocation] = useLocation();
   const { connected: walletConnected } = useWallet();
-  const { connection, connecting, connectX, connectDiscord, disconnect } = useSocialConnection();
+  const { connection, connecting, connectX, disconnect } = useSocialConnection();
   const { avatar, username, saveAvatar, saveUsername } = useProfile();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -76,7 +68,6 @@ export default function Profile() {
 
   const handleConnect = (provider: Provider) => {
     if (provider === "x") connectX();
-    else connectDiscord();
   };
 
   return (

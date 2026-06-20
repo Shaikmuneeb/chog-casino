@@ -3,12 +3,11 @@ import { generateCodeChallenge, generateRandomString } from "@/lib/pkce";
 const STORAGE_KEY = "chog_social_connection";
 const X_STATE_KEY = "chog_x_oauth_state";
 const X_VERIFIER_KEY = "chog_x_pkce_verifier";
-const DISCORD_STATE_KEY = "chog_discord_oauth_state";
 
 /** Fired whenever the connection changes in this tab — `storage` only fires in *other* tabs. */
 export const CONNECTION_CHANGED_EVENT = "chog-social-connection-changed";
 
-export type Provider = "x" | "discord";
+export type Provider = "x";
 
 export interface Connection {
   provider: Provider;
@@ -17,7 +16,6 @@ export interface Connection {
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
   x: "X (Twitter)",
-  discord: "Discord",
 };
 
 // Both providers redirect back to the homepage with ?code&state — handled by handleOAuthRedirect().
@@ -71,27 +69,6 @@ export async function startXLogin(): Promise<void> {
   window.location.href = `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
 }
 
-/** Redirects to Discord's real OAuth2 authorize screen. */
-export function startDiscordLogin(): void {
-  const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID;
-  if (!clientId) {
-    throw new Error("VITE_DISCORD_CLIENT_ID is missing in your .env file.");
-  }
-
-  const state = generateRandomString(16);
-  sessionStorage.setItem(DISCORD_STATE_KEY, state);
-
-  const params = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: getRedirectUri(),
-    scope: "identify",
-    state,
-  });
-
-  window.location.href = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
-}
-
 /**
  * Call once on app load. If the current URL is an OAuth redirect (?code&state),
  * matches the `state` to the provider, records the connection, and cleans the URL.
@@ -104,15 +81,12 @@ export function handleOAuthRedirect(): Connection | null {
   if (!code || !state) return null;
 
   const xState = sessionStorage.getItem(X_STATE_KEY);
-  const discordState = sessionStorage.getItem(DISCORD_STATE_KEY);
 
   let provider: Provider | null = null;
   if (state === xState) provider = "x";
-  else if (state === discordState) provider = "discord";
 
   sessionStorage.removeItem(X_STATE_KEY);
   sessionStorage.removeItem(X_VERIFIER_KEY);
-  sessionStorage.removeItem(DISCORD_STATE_KEY);
   // Strip the OAuth params from the URL so a refresh doesn't re-trigger.
   window.history.replaceState({}, "", window.location.pathname);
 
