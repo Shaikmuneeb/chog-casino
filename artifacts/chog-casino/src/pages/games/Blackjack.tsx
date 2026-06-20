@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
@@ -9,6 +9,47 @@ import bgImage from "@assets/image_1781811969584.png";
 type Card = { value: string; suit: string; numeric: number };
 type GameState = "betting" | "playing" | "done";
 type HandResult = "win" | "push" | "lose" | "bust";
+
+// ── Web Audio: short card-snap sound played as each card slides in ─────────
+let _bjCtx: AudioContext | null = null;
+
+function bjAudioCtx(): AudioContext | null {
+  try {
+    if (!_bjCtx) {
+      _bjCtx = new (window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    }
+    if (_bjCtx.state === "suspended") _bjCtx.resume();
+    return _bjCtx;
+  } catch {
+    return null;
+  }
+}
+
+function playCardSound() {
+  const ctx = bjAudioCtx();
+  if (!ctx) return;
+  const duration = 0.05;
+  const bufferSize = Math.floor(ctx.sampleRate * duration);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+  }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const filter = ctx.createBiquadFilter();
+  filter.type = "highpass";
+  filter.frequency.value = 1400;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.22, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(ctx.destination);
+  noise.start();
+}
+// ─────────────────────────────────────────────────────────────────────────
 
 const SUITS = ["♠", "♥", "♦", "♣"];
 const VALUES = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
@@ -32,6 +73,13 @@ function handValue(cards: Card[]): number {
 function CardDisplay({ card, hidden, delay = 0 }: { card: Card; hidden?: boolean; delay?: number }) {
   const red = card.suit === "♥" || card.suit === "♦";
   const ink = red ? "text-red-600" : "text-gray-900";
+
+  useEffect(() => {
+    const t = setTimeout(() => playCardSound(), delay * 1000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <motion.div
       className="w-12 h-[4.25rem] sm:w-14 sm:h-20 shrink-0 select-none"
@@ -164,6 +212,7 @@ export default function Blackjack() {
 
   const deal = () => {
     if (!canDeal) return;
+    bjAudioCtx(); // unlock audio on this user gesture
     const d = makeDeck();
     updateBalance((b) => b - betAmount);
     setHands([[d[0], d[2]]]);
@@ -178,6 +227,7 @@ export default function Blackjack() {
 
   const hit = () => {
     if (gameState !== "playing") return;
+    bjAudioCtx();
     const card = deck[0];
     const dk = deck.slice(1);
     const newHands = hands.map((h, i) => (i === active ? [...h, card] : h));
@@ -204,6 +254,7 @@ export default function Blackjack() {
 
   const double = () => {
     if (!canDouble) return;
+    bjAudioCtx();
     updateBalance((b) => b - bets[active]);
     const card = deck[0];
     const dk = deck.slice(1);
@@ -219,6 +270,7 @@ export default function Blackjack() {
 
   const split = () => {
     if (!canSplit) return;
+    bjAudioCtx();
     updateBalance((b) => b - bets[0]);
     const [c0, c1] = hands[0];
     const newHands = [[c0, deck[0]], [c1, deck[1]]];
