@@ -8,6 +8,7 @@ import bgImage from "@assets/image_1781811969584.png";
 
 type Card = { value: string; suit: string; numeric: number };
 type GameState = "betting" | "playing" | "done";
+type HandResult = "win" | "push" | "lose" | "bust";
 
 const SUITS = ["♠", "♥", "♦", "♣"];
 const VALUES = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
@@ -104,69 +105,151 @@ function ScoreChip({ value, bust }: { value: number; bust?: boolean }) {
 
 export default function Blackjack() {
   const [betInput, setBetInput] = useState(100);
-  const [activeBet, setActiveBet] = useState(0);
   const { balance, updateBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
   const [deck, setDeck] = useState<Card[]>([]);
-  const [playerCards, setPlayerCards] = useState<Card[]>([]);
+  const [hands, setHands] = useState<Card[][]>([]); // 1 hand normally, 2 after a split
+  const [bets, setBets] = useState<number[]>([]);
+  const [active, setActive] = useState(0); // which hand is being played
   const [dealerCards, setDealerCards] = useState<Card[]>([]);
   const [gameState, setGameState] = useState<GameState>("betting");
-  const [outcome, setOutcome] = useState<"win"|"push"|"lose"|"bust"|"">("");
+  const [results, setResults] = useState<HandResult[]>([]); // per-hand outcome
+  const [netResult, setNetResult] = useState(0); // net win/loss for the banner
 
   const betAmount = betInput;
+  const totalStaked = bets.reduce((a, b) => a + b, 0);
   const canDeal = gameState === "betting" && !gated && betAmount > 0 && betAmount <= balance;
-  const playerVal = handValue(playerCards);
   const dealerVal = handValue(dealerCards);
   const showDealerFull = gameState === "done";
+  const isSplit = hands.length > 1;
+  const activeHand = hands[active] ?? [];
 
-  const deal = useCallback(() => {
+  const canDouble =
+    gameState === "playing" && activeHand.length === 2 && balance >= (bets[active] ?? Infinity);
+  const canSplit =
+    gameState === "playing" &&
+    !isSplit &&
+    activeHand.length === 2 &&
+    activeHand[0].value === activeHand[1].value &&
+    balance >= (bets[0] ?? Infinity);
+
+  // Dealer draws to 17, scores every hand, pays out, ends the round.
+  const resolveRound = (finalHands: Card[][], finalBets: number[], remainingDeck: Card[]) => {
+    let dealer = [...dealerCards];
+    let dk = [...remainingDeck];
+    const anyAlive = finalHands.some((h) => handValue(h) <= 21);
+    if (anyAlive) {
+      while (handValue(dealer) < 17) {
+        dealer = [...dealer, dk[0]];
+        dk = dk.slice(1);
+      }
+    }
+    const dv = handValue(dealer);
+    let payout = 0;
+    const res: HandResult[] = finalHands.map((h, i) => {
+      const pv = handValue(h);
+      if (pv > 21) return "bust";
+      if (dv > 21 || pv > dv) { payout += finalBets[i] * 2; return "win"; }
+      if (pv === dv) { payout += finalBets[i]; return "push"; }
+      return "lose";
+    });
+    setHands(finalHands);
+    setBets(finalBets);
+    setDealerCards(dealer);
+    setDeck(dk);
+    setResults(res);
+    setNetResult(payout - finalBets.reduce((a, b) => a + b, 0));
+    setGameState("done");
+    if (payout > 0) updateBalance((b) => b + payout);
+  };
+
+  const deal = () => {
     if (!canDeal) return;
     const d = makeDeck();
-    setActiveBet(betAmount);
-    updateBalance(b => b - betAmount);
-    setDeck(d.slice(4));
-    setPlayerCards([d[0], d[2]]);
+    updateBalance((b) => b - betAmount);
+    setHands([[d[0], d[2]]]);
+    setBets([betAmount]);
+    setActive(0);
     setDealerCards([d[1], d[3]]);
+    setDeck(d.slice(4));
+    setResults([]);
+    setNetResult(0);
     setGameState("playing");
-    setOutcome("");
-  }, [canDeal, betAmount, updateBalance]);
+  };
 
-  const hit = useCallback(() => {
+  const hit = () => {
     if (gameState !== "playing") return;
-    const newHand = [...playerCards, deck[0]];
-    setDeck(d => d.slice(1));
-    setPlayerCards(newHand);
-    if (handValue(newHand) > 21) {
-      setGameState("done");
-      setOutcome("bust");
+    const card = deck[0];
+    const dk = deck.slice(1);
+    const newHands = hands.map((h, i) => (i === active ? [...h, card] : h));
+    if (handValue(newHands[active]) > 21) {
+      // busted this hand → next hand, or resolve if it was the last
+      if (active + 1 < newHands.length) {
+        setHands(newHands); setDeck(dk); setActive(active + 1);
+      } else {
+        resolveRound(newHands, bets, dk);
+      }
+    } else {
+      setHands(newHands); setDeck(dk);
     }
-  }, [gameState, deck, playerCards]);
+  };
 
-  const stand = useCallback(() => {
+  const stand = () => {
     if (gameState !== "playing") return;
-    let d = [...dealerCards], dk = [...deck];
-    while (handValue(d) < 17) { d = [...d, dk[0]]; dk = dk.slice(1); }
-    setDealerCards(d);
-    setDeck(dk);
-    const pv = handValue(playerCards), dv = handValue(d);
-    const res: "win"|"push"|"lose" = dv > 21 || pv > dv ? "win" : pv === dv ? "push" : "lose";
-    setGameState("done");
-    setOutcome(res);
-    updateBalance(b => res === "win" ? b + activeBet * 2 : res === "push" ? b + activeBet : b);
-  }, [gameState, dealerCards, deck, playerCards, activeBet, updateBalance]);
+    if (active + 1 < hands.length) {
+      setActive(active + 1);
+    } else {
+      resolveRound(hands, bets, deck);
+    }
+  };
+
+  const double = () => {
+    if (!canDouble) return;
+    updateBalance((b) => b - bets[active]);
+    const card = deck[0];
+    const dk = deck.slice(1);
+    const newHands = hands.map((h, i) => (i === active ? [...h, card] : h));
+    const newBets = bets.map((b, i) => (i === active ? b * 2 : b));
+    // Double = one card then stand this hand
+    if (active + 1 < newHands.length) {
+      setHands(newHands); setBets(newBets); setDeck(dk); setActive(active + 1);
+    } else {
+      resolveRound(newHands, newBets, dk);
+    }
+  };
+
+  const split = () => {
+    if (!canSplit) return;
+    updateBalance((b) => b - bets[0]);
+    const [c0, c1] = hands[0];
+    const newHands = [[c0, deck[0]], [c1, deck[1]]];
+    setHands(newHands);
+    setBets([bets[0], bets[0]]);
+    setDeck(deck.slice(2));
+    setActive(0);
+  };
 
   const newRound = () => {
     setGameState("betting");
-    setPlayerCards([]); setDealerCards([]);
-    setOutcome(""); setActiveBet(0);
+    setHands([]); setBets([]); setDealerCards([]); setResults([]); setActive(0); setNetResult(0);
   };
 
-  const outcomeMap: Record<string, { label: string; cls: string }> = {
-    win:  { label: `YOU WIN  +${activeBet.toLocaleString()} $CHOG`, cls: "text-green-300 border-green-400/40 bg-green-500/10" },
-    push: { label: "PUSH — Bet Returned",                           cls: "text-yellow-300 border-yellow-400/40 bg-yellow-500/10" },
-    lose: { label: `DEALER WINS  -${activeBet.toLocaleString()} $CHOG`, cls: "text-red-300 border-red-400/40 bg-red-500/10" },
-    bust: { label: `BUST  -${activeBet.toLocaleString()} $CHOG`,    cls: "text-red-300 border-red-400/40 bg-red-500/10" },
-  };
-  const outcomeConfig = outcome ? outcomeMap[outcome] ?? null : null;
+  const resultLabel = (r: HandResult) =>
+    r === "win" ? "WIN" : r === "push" ? "PUSH" : r === "bust" ? "BUST" : "LOSE";
+  const resultCls = (r: HandResult) =>
+    r === "win"
+      ? "text-green-300 border-green-400/40 bg-green-500/10"
+      : r === "push"
+      ? "text-yellow-300 border-yellow-400/40 bg-yellow-500/10"
+      : "text-red-300 border-red-400/40 bg-red-500/10";
+
+  const bannerConfig =
+    gameState === "done"
+      ? netResult > 0
+        ? { label: `YOU WIN  +${netResult.toLocaleString()} ${currencyLabel}`, cls: "text-green-300 border-green-400/40 bg-green-500/10" }
+        : netResult < 0
+        ? { label: `DEALER WINS  ${netResult.toLocaleString()} ${currencyLabel}`, cls: "text-red-300 border-red-400/40 bg-red-500/10" }
+        : { label: "PUSH — Bet Returned", cls: "text-yellow-300 border-yellow-400/40 bg-yellow-500/10" }
+      : null;
 
   return (
     <GameLayout title="BLACKJACK" subtitle="Beat the Dealer to 21" bgImage={bgImage} accentColor="text-white">
@@ -181,16 +264,18 @@ export default function Blackjack() {
             </div>
           </div>
           <AnimatePresence>
-            {activeBet > 0 && (
+            {totalStaked > 0 && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.85 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0 }}
                 className="text-right"
               >
-                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Current Bet</div>
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">
+                  {isSplit ? "Total Bet" : "Current Bet"}
+                </div>
                 <div className="font-cinzel font-bold text-lg text-white">
-                  {activeBet.toLocaleString()} <span className="text-xs text-purple-300/60">$CHOG</span>
+                  {totalStaked.toLocaleString()} <span className="text-xs text-purple-300/60">{currencyLabel}</span>
                 </div>
               </motion.div>
             )}
@@ -225,40 +310,67 @@ export default function Blackjack() {
           {/* Divider */}
           <div className="border-t border-purple-500/15" />
 
-          {/* Player */}
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-[10px] text-purple-300/40 tracking-widest uppercase">Your Hand</span>
-              {playerCards.length > 0 && (
-                <ScoreChip value={playerVal} bust={playerVal > 21} />
-              )}
-            </div>
-            <div className="flex gap-2 flex-wrap min-h-[4.5rem]" data-testid="player-hand">
-              {playerCards.map((card, i) => (
-                <CardDisplay key={i} card={card} delay={i * 0.07} />
-              ))}
-              {playerCards.length === 0 && (
+          {/* Player hand(s) */}
+          {hands.length === 0 ? (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] text-purple-300/40 tracking-widest uppercase">Your Hand</span>
+              </div>
+              <div className="flex gap-2 flex-wrap min-h-[4.5rem]" data-testid="player-hand">
                 <div className="flex gap-2">
-                  {[0,1].map(i => (
+                  {[0, 1].map((i) => (
                     <div key={i} className="w-12 h-[4.25rem] sm:w-14 sm:h-20 rounded-lg border-2 border-dashed border-purple-700/30" />
                   ))}
                 </div>
-              )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className={isSplit ? "grid grid-cols-2 gap-3" : ""}>
+              {hands.map((hand, hi) => {
+                const val = handValue(hand);
+                const isActive = gameState === "playing" && hi === active;
+                return (
+                  <div
+                    key={hi}
+                    className={`rounded-xl transition-all ${
+                      isSplit ? "p-2 border " + (isActive ? "border-yellow-400/60 bg-yellow-400/5" : "border-purple-500/15") : ""
+                    }`}
+                    data-testid={hi === 0 ? "player-hand" : `player-hand-${hi}`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[10px] text-purple-300/40 tracking-widest uppercase">
+                        {isSplit ? `Hand ${hi + 1}` : "Your Hand"}
+                      </span>
+                      <ScoreChip value={val} bust={val > 21} />
+                      {gameState === "done" && results[hi] && (
+                        <span className={`text-[9px] font-cinzel font-black tracking-wider px-1.5 py-0.5 rounded border ${resultCls(results[hi])}`}>
+                          {resultLabel(results[hi])}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2 flex-wrap min-h-[4.5rem]">
+                      {hand.map((card, i) => (
+                        <CardDisplay key={i} card={card} delay={i * 0.07} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Result banner */}
           <AnimatePresence>
-            {gameState === "done" && outcomeConfig && (
+            {gameState === "done" && bannerConfig && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.88, y: 4 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0 }}
                 transition={{ type: "spring", stiffness: 350, damping: 24 }}
-                className={`text-center py-2.5 rounded-xl font-cinzel font-black text-sm tracking-[0.18em] uppercase border ${outcomeConfig.cls}`}
+                className={`text-center py-2.5 rounded-xl font-cinzel font-black text-sm tracking-[0.18em] uppercase border ${bannerConfig.cls}`}
                 data-testid="blackjack-result"
               >
-                {outcomeConfig.label}
+                {bannerConfig.label}
               </motion.div>
             )}
           </AnimatePresence>
@@ -306,7 +418,7 @@ export default function Blackjack() {
               </motion.div>
             )}
 
-            {/* PLAYING state — Hit / Stand */}
+            {/* PLAYING state — Hit / Stand / Double / Split */}
             {gameState === "playing" && (
               <motion.div
                 key="play-controls"
@@ -332,6 +444,26 @@ export default function Blackjack() {
                   data-testid="button-stand"
                 >
                   Stand
+                </motion.button>
+                <motion.button
+                  whileHover={canSplit ? { scale: 1.03, y: -1 } : {}}
+                  whileTap={canSplit ? { scale: 0.97 } : {}}
+                  onClick={split}
+                  disabled={!canSplit}
+                  className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase glass border border-cyan-400/40 text-cyan-300 hover:border-cyan-400/70 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                  data-testid="button-split"
+                >
+                  Split
+                </motion.button>
+                <motion.button
+                  whileHover={canDouble ? { scale: 1.03, y: -1 } : {}}
+                  whileTap={canDouble ? { scale: 0.97 } : {}}
+                  onClick={double}
+                  disabled={!canDouble}
+                  className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase glass border border-green-400/40 text-green-300 hover:border-green-400/70 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                  data-testid="button-double"
+                >
+                  Double ×2
                 </motion.button>
               </motion.div>
             )}
