@@ -105,15 +105,7 @@ function GameCard({ game, index }: { game: Game; index: number }) {
         <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/20" />
       </div>
 
-      <div className="relative p-6 h-72 flex flex-col justify-between">
-        <div className="flex items-start justify-end">
-          <span
-            className={`text-[10px] font-bold tracking-[0.2em] px-2.5 py-1 rounded-full border backdrop-blur-sm ${game.tagColor}`}
-          >
-            {game.tag}
-          </span>
-        </div>
-
+      <div className="relative p-6 h-72 flex flex-col justify-end">
         <div>
           <h3 className="font-cinzel font-black text-3xl text-white tracking-wider mb-1 drop-shadow-lg">
             {game.name}
