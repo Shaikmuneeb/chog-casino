@@ -6,6 +6,7 @@ import {
   CONTRACTS,
   ENTROPY_ABI,
   ERC20_ABI,
+  OPERATOR_BASE_URL,
   PYTH_ENTROPY_ADDRESS,
   PYTH_ENTROPY_PROVIDER,
   TOKENS,
@@ -13,7 +14,7 @@ import {
   type SupportedToken,
 } from "@/config/contracts";
 
-type TxState = "idle" | "approving" | "pending" | "awaiting_result" | "win" | "loss" | "error";
+type TxState = "idle" | "approving" | "committing" | "pending" | "awaiting_result" | "win" | "loss" | "error";
 
 const COIN_FLIP_PLACE_BET_ABI = [
   {
@@ -37,7 +38,20 @@ const COIN_FLIP_PLACE_BET_ABI = [
     inputs: [],
     outputs: [{ type: "uint8" }], // 0 = PythEntropy, 1 = CommitReveal
   },
+  {
+    type: "event",
+    name: "BetResolved",
+    inputs: [
+      { name: "player", type: "address", indexed: true },
+      { name: "token", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "payoutAmount", type: "uint256", indexed: false },
+      { name: "won", type: "bool", indexed: false },
+    ],
+  },
 ] as const;
+
+const ZERO_BYTES32 = `0x${"0".repeat(64)}` as const;
 
 interface BetFlowProps {
   token: SupportedToken;
@@ -46,17 +60,34 @@ interface BetFlowProps {
   onResolved?: (won: boolean) => void;
 }
 
+/** Asks the operator service (see ../../../operator) for a fresh server-seed commitment.
+ *  Must be called before every commit-reveal placeBet — the contract has no way to verify a
+ *  bet's outcome without this, and placeBet itself doesn't validate the commitment is real. */
+async function requestCommitment(game: string): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
+  const res = await fetch(`${OPERATOR_BASE_URL}/commit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ game }),
+  });
+  if (!res.ok) {
+    throw new Error(`Operator service unreachable or rejected the request (${res.status}). Is it running?`);
+  }
+  return res.json();
+}
+
 /**
  * Reference implementation of the bet flow for CoinFlip. Roulette/Dice/Mines/Crash follow
- * the identical approve -> placeBet -> await-resolution shape with their own extra params
- * inserted before the three trailing RNG args (see each game's placeBet in contracts/src/).
+ * the identical approve -> commit -> placeBet -> await-resolution shape with their own extra
+ * params inserted before the three trailing RNG args (see each game's placeBet in
+ * contracts/src/).
  *
- * IMPORTANT — commit-reveal mode is NOT fully wired up here. BaseGame.sol defaults every
- * game to commit-reveal RNG until an admin calls setRngMode(PythEntropy), and commit-reveal
- * requires a trusted off-chain operator service (holding OPERATOR_ROLE) to generate the
- * server seed, commit its hash, and reveal it after the bet — that service does not exist
- * in this repo. This component only completes the flow once the game contract is switched
- * to Pyth Entropy mode and PYTH_ENTROPY_ADDRESS/PYTH_ENTROPY_PROVIDER are filled in.
+ * Supports both RNG modes the contract can be in:
+ * - CommitReveal (the default, and the only mode in use since Pyth Entropy was never
+ *   configured): asks the operator service for a real {commitment, clientSeed} via
+ *   POST /commit before calling placeBet, then waits for that same operator to reveal and
+ *   settle the bet — watched here via the BetResolved event.
+ * - PythEntropy: only reachable if an admin explicitly switches the contract to it later;
+ *   kept working in case that ever happens, but not the active path today.
  */
 export default function BetFlow({ token, betAmount, wantsHeads, onResolved }: BetFlowProps) {
   const { address, connected } = useWallet();
@@ -104,50 +135,98 @@ export default function BetFlow({ token, betAmount, wantsHeads, onResolved }: Be
         functionName: "rngMode",
       });
 
+      let hash: `0x${string}`;
+
       if (rngMode === 1) {
-        throw new Error(
-          "This game is still in commit-reveal RNG mode, which needs a trusted off-chain " +
-            "operator service to reveal bets — that service isn't built yet. Switch the " +
-            "contract to Pyth Entropy mode (admin-only) before betting from the UI.",
-        );
+        // ── Commit-reveal bet ──
+        setState("committing");
+        const { commitment, clientSeed } = await requestCommitment("coinFlip");
+
+        setState("pending");
+        if (token === "MON") {
+          hash = await walletClient.writeContract({
+            address: CONTRACTS.coinFlip,
+            abi: COIN_FLIP_PLACE_BET_ABI,
+            functionName: "placeBet",
+            args: [tokenInfo.address, amount, wantsHeads, ZERO_BYTES32, clientSeed, commitment],
+            value: amount,
+          });
+        } else {
+          hash = await walletClient.writeContract({
+            address: CONTRACTS.coinFlip,
+            abi: COIN_FLIP_PLACE_BET_ABI,
+            functionName: "placeBet",
+            args: [tokenInfo.address, amount, wantsHeads, ZERO_BYTES32, clientSeed, commitment],
+          });
+        }
+      } else {
+        // ── Pyth Entropy bet ──
+        if (!entropyConfigured) {
+          throw new Error("Pyth Entropy address/provider not configured in src/config/contracts.ts.");
+        }
+        setState("pending");
+        const fee = (await publicClient.readContract({
+          address: PYTH_ENTROPY_ADDRESS,
+          abi: ENTROPY_ABI,
+          functionName: "getFee",
+          args: [PYTH_ENTROPY_PROVIDER],
+        })) as bigint;
+
+        const userRandomNumber = crypto.getRandomValues(new Uint8Array(32));
+        const userRandomHex = `0x${Array.from(userRandomNumber, (b) => b.toString(16).padStart(2, "0")).join("")}` as `0x${string}`;
+        const nativePortion = token === "MON" ? amount : 0n;
+
+        hash = await walletClient.writeContract({
+          address: CONTRACTS.coinFlip,
+          abi: COIN_FLIP_PLACE_BET_ABI,
+          functionName: "placeBet",
+          args: [tokenInfo.address, amount, wantsHeads, userRandomHex, ZERO_BYTES32, ZERO_BYTES32],
+          value: nativePortion + fee,
+        });
       }
-      if (!entropyConfigured) {
-        throw new Error("Pyth Entropy address/provider not configured in src/config/contracts.ts.");
-      }
-
-      // ── Pyth Entropy bet ──
-      setState("pending");
-      const fee = (await publicClient.readContract({
-        address: PYTH_ENTROPY_ADDRESS,
-        abi: ENTROPY_ABI,
-        functionName: "getFee",
-        args: [PYTH_ENTROPY_PROVIDER],
-      })) as bigint;
-
-      const userRandomNumber = crypto.getRandomValues(new Uint8Array(32));
-      const userRandomHex = `0x${Array.from(userRandomNumber, (b) => b.toString(16).padStart(2, "0")).join("")}` as `0x${string}`;
-
-      const nativePortion = token === "MON" ? amount : 0n;
-      const hash = await walletClient.writeContract({
-        address: CONTRACTS.coinFlip,
-        abi: COIN_FLIP_PLACE_BET_ABI,
-        functionName: "placeBet",
-        args: [tokenInfo.address, amount, wantsHeads, userRandomHex, `0x${"0".repeat(64)}`, `0x${"0".repeat(64)}`],
-        value: nativePortion + fee,
-      });
 
       setState("awaiting_result");
       await publicClient.waitForTransactionReceipt({ hash });
 
-      // The entropy callback resolves the bet in a separate transaction shortly after.
-      // A production UI should watch the BetResolved event on the game contract here;
-      // left as a follow-up since it needs an event-watching subscription, not just a receipt.
-      onResolved?.(false);
-      setState("idle");
+      // The bet resolves in a SEPARATE later transaction (the operator's revealAndResolve,
+      // or the Pyth callback) — watch for it rather than assuming this receipt means anything
+      // about the outcome.
+      await awaitResolution(address as `0x${string}`);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Bet failed");
       setState("error");
     }
+  }
+
+  function awaitResolution(player: `0x${string}`): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        unwatch();
+        reject(new Error("Timed out waiting for the bet to resolve — the operator service may be down."));
+      }, 90_000);
+
+      const unwatch = publicClient.watchContractEvent({
+        address: CONTRACTS.coinFlip,
+        abi: COIN_FLIP_PLACE_BET_ABI,
+        eventName: "BetResolved",
+        args: { player },
+        onLogs: (logs) => {
+          const log = logs[0];
+          if (!log) return;
+          clearTimeout(timeout);
+          unwatch();
+          const won = Boolean(log.args.won);
+          setState(won ? "win" : "loss");
+          onResolved?.(won);
+          resolve();
+        },
+        onError: (err) => {
+          clearTimeout(timeout);
+          unwatch();
+          reject(err);
+        },
+      });
+    });
   }
 
   if (!deployed) {
@@ -158,13 +237,14 @@ export default function BetFlow({ token, betAmount, wantsHeads, onResolved }: Be
     <div data-testid="bet-flow">
       <button
         type="button"
-        disabled={!connected || state === "approving" || state === "pending" || state === "awaiting_result"}
+        disabled={!connected || state === "approving" || state === "committing" || state === "pending" || state === "awaiting_result"}
         onClick={placeBet}
         className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.22em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white disabled:opacity-40"
         data-testid="bet-flow-submit"
       >
         {state === "idle" && "Bet"}
         {state === "approving" && `Approving ${token}…`}
+        {state === "committing" && "Preparing Bet…"}
         {state === "pending" && "Placing Bet…"}
         {state === "awaiting_result" && "Awaiting Result…"}
         {state === "win" && "You Won!"}

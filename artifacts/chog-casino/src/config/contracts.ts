@@ -45,6 +45,15 @@ export function isDeployed(address: `0x${string}`): boolean {
 export const PYTH_ENTROPY_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 export const PYTH_ENTROPY_PROVIDER = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
+/**
+ * The off-chain commit-reveal operator (see ../../../operator). Every commit-reveal bet must
+ * call POST {OPERATOR_BASE_URL}/commit BEFORE placeBet, to get a real {commitment, clientSeed}
+ * — placeBet will revert with a meaningless result if you skip this and pass a fake commitment.
+ * Point this at wherever you actually host the operator service; localhost only works for
+ * local development against a locally-running instance.
+ */
+export const OPERATOR_BASE_URL = "http://localhost:8787";
+
 export const ENTROPY_ABI = [
   { type: "function", name: "getFee", stateMutability: "view", inputs: [{ name: "provider", type: "address" }], outputs: [{ type: "uint128" }] },
 ] as const;
@@ -79,5 +88,16 @@ export const GAME_PLACE_BET_ABI_COMMIT_REVEAL = [
       { name: "serverSeedCommitment", type: "bytes32" },
     ],
     outputs: [{ name: "betRef", type: "uint256" }],
+  },
+  {
+    type: "event",
+    name: "BetResolved",
+    inputs: [
+      { name: "player", type: "address", indexed: true },
+      { name: "token", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "payoutAmount", type: "uint256", indexed: false },
+      { name: "won", type: "bool", indexed: false },
+    ],
   },
 ] as const;
