@@ -3,6 +3,7 @@ packages:
   - lib/*
   - lib/integrations/*
   - scripts
+  - operator
 
 allowBuilds:
   '@reown/appkit': false

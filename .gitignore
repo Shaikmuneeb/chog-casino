@@ -58,3 +58,6 @@ Thumbs.db
 contracts/lib/
 contracts/out/
 contracts/cache/
+
+# Operator service's seed store (contains unrevealed server seeds — never share or commit)
+operator/data/*.json
