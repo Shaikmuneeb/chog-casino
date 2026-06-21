@@ -53,3 +53,8 @@ Thumbs.db
 .env.local
 
 .vercel
+
+# Foundry build artifacts & vendored deps (re-fetch with `forge install` / `forge build`)
+contracts/lib/
+contracts/out/
+contracts/cache/
