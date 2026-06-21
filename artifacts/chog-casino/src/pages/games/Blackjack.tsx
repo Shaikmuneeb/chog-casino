@@ -10,7 +10,7 @@ import { useGameMode } from "@/context/GameModeContext";
 import { useWallet } from "@/hooks/useWallet";
 import { useBlackjackOnChain, type LiveCards } from "@/hooks/useBlackjackOnChain";
 import { publicClient } from "@/lib/casinoClient";
-import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
+import { CUSTODIAL_VAULT_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811969584.png";
 
 type Card = { value: string; suit: string; numeric: number };
@@ -194,33 +194,30 @@ export default function Blackjack() {
   const [actionPending, setActionPending] = useState(false);
   const [awaitingSettlement, setAwaitingSettlement] = useState(false);
   const {
-    placeBet: placeBetOnChain,
-    hit: hitOnChain,
-    stand: standOnChain,
-    double: doubleOnChain,
-    split: splitOnChain,
-    waitForResolution,
+    placeBetFromVault,
+    hitFromVault,
+    standFromVault,
+    doubleFromVault,
+    splitFromVault,
+    waitForResolutionFromVault,
   } = useBlackjackOnChain();
-  const deployed = isDeployed(CONTRACTS.blackjack) && isDeployed(CONTRACTS.treasury);
+  const deployed = isDeployed(CONTRACTS.blackjack) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   useEffect(() => {
     if (!isReal || !connected || !address) return;
     let cancelled = false;
     async function load() {
       const info = TOKENS[realToken];
-      const raw =
-        realToken === "MON"
-          ? await publicClient.getBalance({ address: address as `0x${string}` })
-          : ((await publicClient.readContract({
-              address: info.address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [address as `0x${string}`],
-            })) as bigint);
+      const raw = (await publicClient.readContract({
+        address: CONTRACTS.custodialVault,
+        abi: CUSTODIAL_VAULT_ABI,
+        functionName: "balanceOf",
+        args: [address as `0x${string}`, info.address],
+      })) as bigint;
       if (!cancelled) setRealBalanceRaw(raw);
     }
     load();
-    const id = setInterval(load, 15_000);
+    const id = setInterval(load, 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -283,7 +280,7 @@ export default function Blackjack() {
     setResults(computeResultsFromCards(cards));
     setAwaitingSettlement(true);
     try {
-      const payout = await waitForResolution(roundId);
+      const payout = await waitForResolutionFromVault(roundId);
       const payoutHuman = Number(formatUnits(payout, TOKENS[realToken].decimals));
       const staked = betsHuman.reduce((a, b) => a + b, 0);
       setNetResult(Math.round((payoutHuman - staked) * 10000) / 10000);
@@ -309,7 +306,7 @@ export default function Blackjack() {
     setChainError(null);
     setActionPending(true);
     try {
-      const { roundId: rid, cards } = await placeBetOnChain(realToken, String(realBetAmount));
+      const { roundId: rid, cards } = await placeBetFromVault(realToken, String(realBetAmount));
       setRoundId(rid);
       applyLiveCards(cards);
       setBets([realBetAmount]);
@@ -330,14 +327,14 @@ export default function Blackjack() {
     bjAudioCtx();
     setActionPending(true);
     try {
-      let updated = await hitOnChain(roundId, handIndex);
+      let updated = await hitFromVault(roundId, handIndex);
       applyLiveCards(updated);
       const handRanks = handIndex === 0 ? updated.hand0 : updated.hand1;
       const val = handValue(handRanks.map((r, i) => rankToCard(r, i)));
       if (val > 21) {
         // Busted — the contract has no way to know this on its own; we must close the hand
         // explicitly so the round can ever become eligible for settlement.
-        updated = await standOnChain(roundId, handIndex);
+        updated = await standFromVault(roundId, handIndex);
         applyLiveCards(updated);
         await advanceOrFinish(handIndex, updated, bets);
       }
@@ -352,7 +349,7 @@ export default function Blackjack() {
     if (!roundId || actionPending) return;
     setActionPending(true);
     try {
-      const updated = await standOnChain(roundId, handIndex);
+      const updated = await standFromVault(roundId, handIndex);
       applyLiveCards(updated);
       await advanceOrFinish(handIndex, updated, bets);
     } catch (err) {
@@ -367,7 +364,7 @@ export default function Blackjack() {
     bjAudioCtx();
     setActionPending(true);
     try {
-      const updated = await doubleOnChain(roundId, handIndex, realToken, String(bets[handIndex]));
+      const updated = await doubleFromVault(roundId, handIndex);
       applyLiveCards(updated);
       const newBets = bets.map((b, i) => (i === handIndex ? b * 2 : b));
       setBets(newBets);
@@ -384,7 +381,7 @@ export default function Blackjack() {
     bjAudioCtx();
     setActionPending(true);
     try {
-      const updated = await splitOnChain(roundId, realToken, String(bets[0]));
+      const updated = await splitFromVault(roundId);
       applyLiveCards(updated);
       setBets([bets[0], bets[0]]);
       setActive(0);

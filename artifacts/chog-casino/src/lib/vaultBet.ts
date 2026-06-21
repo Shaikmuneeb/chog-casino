@@ -9,20 +9,25 @@ export interface VaultBetResult {
   token?: `0x${string}`;
 }
 
-export async function postVaultBet<T extends Record<string, unknown>>(
-  game: string,
-  body: T,
-): Promise<{ betRef: string }> {
-  const res = await fetch(`${OPERATOR_BASE_URL}/vault-bet/${game}/place`, {
+async function postToOperator<R>(path: string, body: Record<string, unknown>): Promise<R> {
+  const res = await fetch(`${OPERATOR_BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.error ?? `Bet failed (${res.status})`);
+    throw new Error(errBody.error ?? `Request failed (${res.status})`);
   }
   return res.json();
+}
+
+export function postVaultBet<R = { betRef: string }>(game: string, body: Record<string, unknown>): Promise<R> {
+  return postToOperator<R>(`/vault-bet/${game}/place`, body);
+}
+
+export function postVaultBetAction<R>(path: string, body: Record<string, unknown>): Promise<R> {
+  return postToOperator<R>(`/vault-bet/${path}`, body);
 }
 
 export async function pollVaultBetResult(game: string, betRef: string, timeoutMs = 90_000): Promise<VaultBetResult> {

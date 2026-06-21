@@ -13,6 +13,7 @@ export const config = {
   port: Number(process.env.PORT ?? 8787),
   seedStorePath: process.env.SEED_STORE_PATH ?? "./data/seeds.json",
 
+  treasury: required("TREASURY_ADDRESS") as Address,
   games: {
     coinFlip: required("COINFLIP_ADDRESS") as Address,
     dice: required("DICE_ADDRESS") as Address,

@@ -9,6 +9,7 @@ import {
   TOKENS,
   type SupportedToken,
 } from "@/config/contracts";
+import { postVaultBet, postVaultBetAction, pollVaultBetResult } from "@/lib/vaultBet";
 
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
@@ -276,5 +277,66 @@ export function useBlackjackOnChain() {
     });
   }, []);
 
-  return { status, fetchLiveCards, placeBet, hit, stand, double, split, waitForResolution };
+  /** Instant, signature-free round funded by the player's CustodialVault balance — no wallet
+   *  popup anywhere in this path. See operator/src/vaultBet.ts for the on-chain mechanics. */
+  const placeBetFromVault = useCallback(
+    async (token: SupportedToken, amountHuman: string): Promise<{ roundId: bigint; cards: LiveCards }> => {
+      if (!connected || !address) throw new Error("Wallet not connected");
+      const tokenInfo = TOKENS[token];
+      const amount = parseUnits(amountHuman, tokenInfo.decimals);
+
+      setStatus("pending");
+      try {
+        const { roundId, cards } = await postVaultBet<{ roundId: string; cards: LiveCards }>("blackjack", {
+          owner: address,
+          token: tokenInfo.address,
+          amountWei: amount.toString(),
+        });
+        setStatus("idle");
+        return { roundId: BigInt(roundId), cards };
+      } catch (err) {
+        setStatus("idle");
+        throw err;
+      }
+    },
+    [address, connected],
+  );
+
+  async function blackjackActionFromVault(action: string, roundId: bigint, handIndex = 0): Promise<LiveCards> {
+    if (!address) throw new Error("Wallet not connected");
+    const { cards } = await postVaultBetAction<{ cards: LiveCards }>(`blackjack/${roundId}/${action}`, {
+      owner: address,
+      handIndex,
+    });
+    return cards;
+  }
+
+  const hitFromVault = useCallback((roundId: bigint, handIndex: number) => blackjackActionFromVault("hit", roundId, handIndex), [address]);
+  const standFromVault = useCallback((roundId: bigint, handIndex: number) => blackjackActionFromVault("stand", roundId, handIndex), [address]);
+  const doubleFromVault = useCallback((roundId: bigint, handIndex: number) => blackjackActionFromVault("double", roundId, handIndex), [address]);
+  const splitFromVault = useCallback((roundId: bigint) => blackjackActionFromVault("split", roundId), [address]);
+
+  /** Polls instead of watching a wallet-visible event, since vault-funded rounds are resolved
+   *  by the operator's own wallet, not the player's. */
+  const waitForResolutionFromVault = useCallback(async (roundId: bigint): Promise<bigint> => {
+    const result = await pollVaultBetResult("blackjack", roundId.toString());
+    return BigInt(result.payoutAmount ?? "0");
+  }, []);
+
+  return {
+    status,
+    fetchLiveCards,
+    placeBet,
+    hit,
+    stand,
+    double,
+    split,
+    waitForResolution,
+    placeBetFromVault,
+    hitFromVault,
+    standFromVault,
+    doubleFromVault,
+    splitFromVault,
+    waitForResolutionFromVault,
+  };
 }

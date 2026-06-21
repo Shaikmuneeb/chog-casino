@@ -12,6 +12,11 @@ import {
   placeRouletteBet,
   placeMinesBet,
   placeCrashBet,
+  placeBlackjackBet,
+  blackjackHit,
+  blackjackStand,
+  blackjackDouble,
+  blackjackSplit,
   getVaultBetResult,
   VaultBetError,
 } from "./vaultBet.js";
@@ -188,6 +193,67 @@ export function startServer(store: SeedStore, depositStore: DepositStore) {
     } catch (err) {
       if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
       console.error("[server] /vault-bet/crash/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  /**
+   * Instant, signature-free Blackjack round funded by the player's CustodialVault balance.
+   * Returns the same {cards} shape as the wallet-direct flow's placeBet so the frontend's
+   * existing round-state handling doesn't need to branch on which mode opened the round.
+   */
+  app.post("/vault-bet/blackjack/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+
+      const { roundId } = await placeBlackjackBet(store, owner as Address, token as Address, BigInt(amountWei));
+      const cards = await getLiveCards(config.blackjack, BigInt(roundId), store);
+      res.json({ roundId, cards });
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/blackjack/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  function blackjackActionRoute(action: (store: SeedStore, owner: Address, roundId: string, handIndex: number) => Promise<void>) {
+    return async (req: express.Request, res: express.Response) => {
+      try {
+        const owner = req.body?.owner as string | undefined;
+        const handIndex = (req.body?.handIndex as number | undefined) ?? 0;
+        if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+
+        await action(store, owner as Address, req.params.roundId, handIndex);
+        const cards = await getLiveCards(config.blackjack, BigInt(req.params.roundId), store);
+        res.json({ cards });
+      } catch (err) {
+        if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+        console.error(`[server] ${req.path} failed`, err);
+        res.status(500).json({ error: "internal error" });
+      }
+    };
+  }
+
+  app.post("/vault-bet/blackjack/:roundId/hit", blackjackActionRoute(blackjackHit));
+  app.post("/vault-bet/blackjack/:roundId/stand", blackjackActionRoute(blackjackStand));
+  app.post("/vault-bet/blackjack/:roundId/double", blackjackActionRoute(blackjackDouble));
+
+  app.post("/vault-bet/blackjack/:roundId/split", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+
+      await blackjackSplit(store, owner as Address, req.params.roundId);
+      const cards = await getLiveCards(config.blackjack, BigInt(req.params.roundId), store);
+      res.json({ cards });
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/blackjack/:roundId/split failed", err);
       res.status(500).json({ error: "internal error" });
     }
   });

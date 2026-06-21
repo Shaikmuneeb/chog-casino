@@ -1,7 +1,8 @@
-import type { Address, Hex } from "viem";
-import { publicClient, walletClient } from "./chain.js";
-import { BLACKJACK_ABI } from "./abi.js";
-import { SeedStore } from "./store.js";
+import { keccak256, parseEventLogs, toHex, type Address, type Hex, type TransactionReceipt } from "viem";
+import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
+import { BLACKJACK_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
+import { SeedStore, type SeedRecord } from "./store.js";
+import { config } from "./config.js";
 import { replayRound, type ReplayedRound } from "./blackjackReplay.js";
 
 type RoundTuple = readonly [
@@ -59,6 +60,61 @@ export function watchBlackjack(address: Address, store: SeedStore) {
     if (record.game !== "blackjack") continue;
     void maybeResolve(address, BigInt(record.betRef!), store);
   }
+  for (const record of store.pendingVaultCredits()) {
+    if (record.game !== "blackjack") continue;
+    void resumeVaultCredit(address, record, store);
+  }
+}
+
+/** Resumes a vault credit that never completed before a restart, by re-fetching the exact
+ *  revealAndResolve receipt (recorded as resolveTxHash) instead of scanning chain history. */
+async function resumeVaultCredit(address: Address, record: SeedRecord, store: SeedStore) {
+  if (!record.resolveTxHash) {
+    console.error(`[watcher:blackjack] commitment ${record.commitment} has no resolveTxHash — cannot resume vault credit, manual check required`);
+    return;
+  }
+  const receipt = await publicClient.getTransactionReceipt({ hash: record.resolveTxHash });
+  await creditVaultIfWon(address, receipt, record, store);
+}
+
+/**
+ * For vault-funded rounds only (record.vaultOwner is set): the operator's own wallet was the
+ * player on every placeBet/hit/stand/double/split call, so the contract paid US, not the real
+ * player. RoundResolved only carries totalPayout (no token), so the token is read from the
+ * round struct itself. On a loss (totalPayout 0), nothing happens — every stake was already
+ * debited as it was placed (see vaultBet.ts's blackjack functions).
+ */
+async function creditVaultIfWon(address: Address, receipt: TransactionReceipt, record: SeedRecord, store: SeedStore) {
+  if (!vaultWalletClient || !config.custodialVault) {
+    console.error(`[watcher:blackjack] vault-funded round resolved but vault operator isn't configured — cannot credit`);
+    return;
+  }
+
+  const [resolvedLog] = parseEventLogs({ abi: BLACKJACK_ABI, eventName: "RoundResolved", logs: receipt.logs });
+  if (!resolvedLog) {
+    console.error(`[watcher:blackjack] could not find RoundResolved log to credit vault for ${record.commitment}`);
+    return;
+  }
+  const { roundId, totalPayout } = resolvedLog.args;
+  const round = await getRound(address, roundId!);
+  const token = round[1] as Address;
+  const outcome = { won: !!totalPayout && totalPayout > 0n, payoutAmount: (totalPayout ?? 0n).toString(), token };
+
+  if (!totalPayout || totalPayout === 0n) {
+    store.markVaultCredited(record.commitment, outcome);
+    return;
+  }
+
+  const betRef = keccak256(toHex(`${record.commitment}-payout`));
+  const hash = await vaultWalletClient.writeContract({
+    address: config.custodialVault,
+    abi: CUSTODIAL_VAULT_ABI,
+    functionName: "credit",
+    args: [record.vaultOwner!, token, totalPayout, betRef],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  store.markVaultCredited(record.commitment, outcome);
+  console.log(`[watcher:blackjack] credited vault-funded win: ${record.vaultOwner} +${totalPayout} of ${token}`);
 }
 
 async function getRound(address: Address, roundId: bigint): Promise<RoundTuple> {
@@ -98,9 +154,13 @@ async function maybeResolve(address: Address, roundId: bigint, store: SeedStore)
       functionName: "revealAndResolve",
       args: [roundId, record.serverSeed],
     });
-    await publicClient.waitForTransactionReceipt({ hash });
-    store.markResolved(commitment);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    store.markResolved(commitment, hash);
     console.log(`[watcher:blackjack] resolved round ${roundId} (tx ${hash})`);
+
+    if (record.vaultOwner) {
+      await creditVaultIfWon(address, receipt, record, store);
+    }
   } catch (err) {
     console.error(`[watcher:blackjack] failed to reveal round ${roundId}`, err);
   }

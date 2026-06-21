@@ -189,6 +189,55 @@ export const BLACKJACK_ABI = [
   },
   {
     type: "function",
+    name: "placeBet",
+    stateMutability: "payable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "clientSeed", type: "bytes32" },
+      { name: "serverSeedCommitment", type: "bytes32" },
+    ],
+    outputs: [{ name: "roundId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "hit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "roundId", type: "uint256" },
+      { name: "handIndex", type: "uint8" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "stand",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "roundId", type: "uint256" },
+      { name: "handIndex", type: "uint8" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "double",
+    stateMutability: "payable",
+    inputs: [
+      { name: "roundId", type: "uint256" },
+      { name: "handIndex", type: "uint8" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "split",
+    stateMutability: "payable",
+    inputs: [{ name: "roundId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "rounds",
     stateMutability: "view",
     inputs: [{ name: "roundId", type: "uint256" }],
@@ -242,6 +291,26 @@ export const ERC20_ABI = [
     stateMutability: "nonpayable",
     inputs: [
       { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     outputs: [{ type: "bool" }],
