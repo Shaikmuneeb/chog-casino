@@ -1,17 +1,7 @@
-import { defineChain } from "viem";
+import { monad } from "@/chains";
 
-/**
- * !! VERIFY BEFORE USE !!
- * The existing src/chains.ts already defines Monad with chain id 143.
- * The contract spec for this deploy says chain id 41454. These conflict —
- * confirm the real Monad mainnet chain id before deploying or wiring up the frontend.
- */
-export const monadMainnet = defineChain({
-  id: 41454,
-  name: "Monad",
-  nativeCurrency: { decimals: 18, name: "Monad", symbol: "MON" },
-  rpcUrls: { default: { http: ["https://rpc.monad.xyz"] } },
-});
+// Reuse the existing chain definition (id 143) instead of duplicating it — confirmed correct.
+export const monadMainnet = monad;
 
 // Hardcoded token registry — do not change without redeploying the Treasury.
 export const NATIVE_TOKEN = "0x0000000000000000000000000000000000000000" as const;
@@ -32,12 +22,15 @@ export const TOKENS: Record<SupportedToken, { address: `0x${string}`; symbol: st
  * every component below treats the zero address as "not deployed yet" and disables betting.
  */
 export const CONTRACTS = {
-  treasury: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-  coinFlip: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-  dice: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-  roulette: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-  mines: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-  crash: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+  treasury: "0x0eCcfcD70E7AE6B4D11C86b5bF34F1e84069Ea84" as `0x${string}`,
+  coinFlip: "0x533Aa6cf0D7C0a232c740a2364B6dD60c60174Cf" as `0x${string}`,
+  dice: "0xA6CA2dcc13Ef28714610440f136A2789d65B07dd" as `0x${string}`,
+  roulette: "0x4b90Bc0E486983C85F29d56C289ce90759510Eab" as `0x${string}`,
+  mines: "0xa5Ac542aF5d8381a2Ee174a87D8874De2693C819" as `0x${string}`,
+  crash: "0x83B779059B82f149F86e96B04c9700bb15b45a63" as `0x${string}`,
+  // Fill in after running `forge script script/DeployBlackjack.s.sol:DeployBlackjack --broadcast`
+  // (see contracts/script/DeployBlackjack.s.sol) — deploys against the SAME treasury above.
+  blackjack: "0x0000000000000000000000000000000000000000" as `0x${string}`,
 };
 
 export function isDeployed(address: `0x${string}`): boolean {
