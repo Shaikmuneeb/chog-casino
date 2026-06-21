@@ -1,9 +1,16 @@
 import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
 import WalletGateNotice from "@/components/WalletGateNotice";
+import TokenSelector from "@/components/TokenSelector";
 import { useGameBalance } from "@/hooks/useGameBalance";
+import { useGameMode } from "@/context/GameModeContext";
+import { useWallet } from "@/hooks/useWallet";
+import { useBlackjackOnChain, type LiveCards } from "@/hooks/useBlackjackOnChain";
+import { publicClient } from "@/lib/casinoClient";
+import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811969584.png";
 
 type Card = { value: string; suit: string; numeric: number };
@@ -68,6 +75,15 @@ function handValue(cards: Card[]): number {
   let aces = cards.filter(c => c.value === "A").length;
   while (t > 21 && aces-- > 0) t -= 10;
   return t;
+}
+
+// Converts the operator's rank-only (0-12) card encoding into a displayable Card. Suit is
+// purely cosmetic here — rank 0-12 already fully determines blackjack value, and the
+// contract/operator never track suits at all (they don't affect scoring or payout).
+function rankToCard(rank: number, idx: number): Card {
+  const value = VALUES[rank] ?? "2";
+  const numeric = value === "A" ? 11 : ["J", "Q", "K"].includes(value) ? 10 : parseInt(value);
+  return { value, suit: SUITS[idx % SUITS.length], numeric };
 }
 
 function CardDisplay({ card, hidden, delay = 0 }: { card: Card; hidden?: boolean; delay?: number }) {
@@ -152,8 +168,12 @@ function ScoreChip({ value, bust }: { value: number; bust?: boolean }) {
 }
 
 export default function Blackjack() {
+  const { mode } = useGameMode();
+  const isReal = mode === "real";
+  const { address, connected } = useWallet();
+
   const [betInput, setBetInput] = useState(100);
-  const { balance, updateBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
+  const { balance, updateBalance, showBalance, currencyLabel } = useGameBalance();
   const [deck, setDeck] = useState<Card[]>([]);
   const [hands, setHands] = useState<Card[][]>([]); // 1 hand normally, 2 after a split
   const [bets, setBets] = useState<number[]>([]);
@@ -163,22 +183,259 @@ export default function Blackjack() {
   const [results, setResults] = useState<HandResult[]>([]); // per-hand outcome
   const [netResult, setNetResult] = useState(0); // net win/loss for the banner
 
+  // ── Real-mode on-chain state ──
+  const [realToken, setRealToken] = useState<SupportedToken>("MON");
+  const [realBetAmount, setRealBetAmount] = useState(1);
+  const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
+  const [chainError, setChainError] = useState<string | null>(null);
+  const [roundId, setRoundId] = useState<bigint | null>(null);
+  const [handClosed, setHandClosed] = useState<[boolean, boolean]>([false, false]);
+  const [dealerHoleRevealed, setDealerHoleRevealed] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
+  const [awaitingSettlement, setAwaitingSettlement] = useState(false);
+  const {
+    placeBet: placeBetOnChain,
+    hit: hitOnChain,
+    stand: standOnChain,
+    double: doubleOnChain,
+    split: splitOnChain,
+    waitForResolution,
+  } = useBlackjackOnChain();
+  const deployed = isDeployed(CONTRACTS.blackjack) && isDeployed(CONTRACTS.treasury);
+
+  useEffect(() => {
+    if (!isReal || !connected || !address) return;
+    let cancelled = false;
+    async function load() {
+      const info = TOKENS[realToken];
+      const raw =
+        realToken === "MON"
+          ? await publicClient.getBalance({ address: address as `0x${string}` })
+          : ((await publicClient.readContract({
+              address: info.address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [address as `0x${string}`],
+            })) as bigint);
+      if (!cancelled) setRealBalanceRaw(raw);
+    }
+    load();
+    const id = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isReal, connected, address, realToken]);
+
+  const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
+
+  // Switching Real/Fun mid-round must not leak the other mode's state onto screen.
+  useEffect(() => {
+    setGameState("betting");
+    setHands([]);
+    setBets([]);
+    setDealerCards([]);
+    setResults([]);
+    setActive(0);
+    setNetResult(0);
+    setRoundId(null);
+    setChainError(null);
+    setHandClosed([false, false]);
+    setDealerHoleRevealed(false);
+    setAwaitingSettlement(false);
+  }, [isReal]);
+
+  const applyLiveCards = useCallback((cards: LiveCards) => {
+    const hand0Cards = cards.hand0.map((r, i) => rankToCard(r, i));
+    const hand1Cards = cards.hand1.map((r, i) => rankToCard(r, i + 10));
+    setHands(cards.hand1.length > 0 ? [hand0Cards, hand1Cards] : [hand0Cards]);
+    setDealerCards([
+      rankToCard(cards.dealerUp, 20),
+      rankToCard(cards.dealerHoleRevealed ? cards.dealerHole : 0, 21),
+    ]);
+    setDealerHoleRevealed(cards.dealerHoleRevealed);
+  }, []);
+
+  const computeResultsFromCards = (cards: LiveCards): HandResult[] => {
+    const dealerTotal = handValue([rankToCard(cards.dealerUp, 0), rankToCard(cards.dealerHole, 1)]);
+    const handsRanks = cards.hand1.length > 0 ? [cards.hand0, cards.hand1] : [cards.hand0];
+    return handsRanks.map((h) => {
+      const pv = handValue(h.map((r, i) => rankToCard(r, i)));
+      if (pv > 21) return "bust";
+      if (dealerTotal > 21 || pv > dealerTotal) return "win";
+      if (pv === dealerTotal) return "push";
+      return "lose";
+    });
+  };
+
+  const advanceOrFinish = async (justClosedIndex: number, cards: LiveCards, betsHuman: number[]) => {
+    const totalHands = cards.hand1.length > 0 ? 2 : 1;
+    const closedAfter = [...handClosed] as [boolean, boolean];
+    closedAfter[justClosedIndex] = true;
+    const nextIndex = justClosedIndex + 1;
+    if (nextIndex < totalHands && !closedAfter[nextIndex]) {
+      setHandClosed(closedAfter);
+      setActive(nextIndex);
+      return;
+    }
+    setHandClosed(closedAfter);
+    if (!roundId) return;
+    setResults(computeResultsFromCards(cards));
+    setAwaitingSettlement(true);
+    try {
+      const payout = await waitForResolution(roundId);
+      const payoutHuman = Number(formatUnits(payout, TOKENS[realToken].decimals));
+      const staked = betsHuman.reduce((a, b) => a + b, 0);
+      setNetResult(Math.round((payoutHuman - staked) * 10000) / 10000);
+      setGameState("done");
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Settlement failed");
+    } finally {
+      setAwaitingSettlement(false);
+    }
+  };
+
+  const canDealReal =
+    gameState === "betting" &&
+    connected &&
+    deployed &&
+    !actionPending &&
+    realBetAmount > 0 &&
+    realBetAmount <= realBalanceHuman;
+
+  const dealReal = async () => {
+    if (!canDealReal) return;
+    bjAudioCtx();
+    setChainError(null);
+    setActionPending(true);
+    try {
+      const { roundId: rid, cards } = await placeBetOnChain(realToken, String(realBetAmount));
+      setRoundId(rid);
+      applyLiveCards(cards);
+      setBets([realBetAmount]);
+      setHandClosed([false, false]);
+      setActive(0);
+      setResults([]);
+      setNetResult(0);
+      setGameState("playing");
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Bet failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const hitReal = async (handIndex: number) => {
+    if (!roundId || actionPending) return;
+    bjAudioCtx();
+    setActionPending(true);
+    try {
+      let updated = await hitOnChain(roundId, handIndex);
+      applyLiveCards(updated);
+      const handRanks = handIndex === 0 ? updated.hand0 : updated.hand1;
+      const val = handValue(handRanks.map((r, i) => rankToCard(r, i)));
+      if (val > 21) {
+        // Busted — the contract has no way to know this on its own; we must close the hand
+        // explicitly so the round can ever become eligible for settlement.
+        updated = await standOnChain(roundId, handIndex);
+        applyLiveCards(updated);
+        await advanceOrFinish(handIndex, updated, bets);
+      }
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Hit failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const standReal = async (handIndex: number) => {
+    if (!roundId || actionPending) return;
+    setActionPending(true);
+    try {
+      const updated = await standOnChain(roundId, handIndex);
+      applyLiveCards(updated);
+      await advanceOrFinish(handIndex, updated, bets);
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Stand failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const doubleReal = async (handIndex: number) => {
+    if (!roundId || actionPending) return;
+    bjAudioCtx();
+    setActionPending(true);
+    try {
+      const updated = await doubleOnChain(roundId, handIndex, realToken, String(bets[handIndex]));
+      applyLiveCards(updated);
+      const newBets = bets.map((b, i) => (i === handIndex ? b * 2 : b));
+      setBets(newBets);
+      await advanceOrFinish(handIndex, updated, newBets);
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Double failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const splitReal = async () => {
+    if (!roundId || actionPending) return;
+    bjAudioCtx();
+    setActionPending(true);
+    try {
+      const updated = await splitOnChain(roundId, realToken, String(bets[0]));
+      applyLiveCards(updated);
+      setBets([bets[0], bets[0]]);
+      setActive(0);
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Split failed");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const newRoundReal = () => {
+    setGameState("betting");
+    setHands([]);
+    setDealerCards([]);
+    setResults([]);
+    setActive(0);
+    setNetResult(0);
+    setRoundId(null);
+    setHandClosed([false, false]);
+    setDealerHoleRevealed(false);
+    setChainError(null);
+  };
+
   const betAmount = betInput;
   const totalStaked = bets.reduce((a, b) => a + b, 0);
-  const canDeal = gameState === "betting" && !gated && betAmount > 0 && betAmount <= balance;
+  const canDeal = gameState === "betting" && !isReal && betAmount > 0 && betAmount <= balance;
   const dealerVal = handValue(dealerCards);
-  const showDealerFull = gameState === "done";
+  const showDealerFull = isReal ? dealerHoleRevealed : gameState === "done";
   const isSplit = hands.length > 1;
   const activeHand = hands[active] ?? [];
+  const unitLabel = isReal ? realToken : currencyLabel;
 
-  const canDouble =
-    gameState === "playing" && activeHand.length === 2 && balance >= (bets[active] ?? Infinity);
-  const canSplit =
-    gameState === "playing" &&
-    !isSplit &&
-    activeHand.length === 2 &&
-    activeHand[0].value === activeHand[1].value &&
-    balance >= (bets[0] ?? Infinity);
+  const canDouble = isReal
+    ? gameState === "playing" &&
+      !actionPending &&
+      !handClosed[active] &&
+      activeHand.length === 2 &&
+      realBalanceHuman >= (bets[active] ?? Infinity)
+    : gameState === "playing" && activeHand.length === 2 && balance >= (bets[active] ?? Infinity);
+  const canSplit = isReal
+    ? gameState === "playing" &&
+      !actionPending &&
+      !isSplit &&
+      activeHand.length === 2 &&
+      activeHand[0]?.value === activeHand[1]?.value &&
+      realBalanceHuman >= (bets[0] ?? Infinity)
+    : gameState === "playing" &&
+      !isSplit &&
+      activeHand.length === 2 &&
+      activeHand[0].value === activeHand[1].value &&
+      balance >= (bets[0] ?? Infinity);
 
   // Dealer draws to 17, scores every hand, pays out, ends the round.
   const resolveRound = (finalHands: Card[][], finalBets: number[], remainingDeck: Card[]) => {
@@ -210,7 +467,7 @@ export default function Blackjack() {
     if (payout > 0) updateBalance((b) => b + payout);
   };
 
-  const deal = () => {
+  const dealFun = () => {
     if (!canDeal) return;
     bjAudioCtx(); // unlock audio on this user gesture
     const d = makeDeck();
@@ -225,7 +482,7 @@ export default function Blackjack() {
     setGameState("playing");
   };
 
-  const hit = () => {
+  const hitFun = () => {
     if (gameState !== "playing") return;
     bjAudioCtx();
     const card = deck[0];
@@ -243,7 +500,7 @@ export default function Blackjack() {
     }
   };
 
-  const stand = () => {
+  const standFun = () => {
     if (gameState !== "playing") return;
     if (active + 1 < hands.length) {
       setActive(active + 1);
@@ -252,7 +509,7 @@ export default function Blackjack() {
     }
   };
 
-  const double = () => {
+  const doubleFun = () => {
     if (!canDouble) return;
     bjAudioCtx();
     updateBalance((b) => b - bets[active]);
@@ -268,7 +525,7 @@ export default function Blackjack() {
     }
   };
 
-  const split = () => {
+  const splitFun = () => {
     if (!canSplit) return;
     bjAudioCtx();
     updateBalance((b) => b - bets[0]);
@@ -280,10 +537,17 @@ export default function Blackjack() {
     setActive(0);
   };
 
-  const newRound = () => {
+  const deal = isReal ? dealReal : dealFun;
+  const hit = () => (isReal ? hitReal(active) : hitFun());
+  const stand = () => (isReal ? standReal(active) : standFun());
+  const double = () => (isReal ? doubleReal(active) : doubleFun());
+  const split = isReal ? splitReal : splitFun;
+
+  const newRoundFun = () => {
     setGameState("betting");
     setHands([]); setBets([]); setDealerCards([]); setResults([]); setActive(0); setNetResult(0);
   };
+  const newRound = isReal ? newRoundReal : newRoundFun;
 
   const resultLabel = (r: HandResult) =>
     r === "win" ? "WIN" : r === "push" ? "PUSH" : r === "bust" ? "BUST" : "LOSE";
@@ -297,9 +561,9 @@ export default function Blackjack() {
   const bannerConfig =
     gameState === "done"
       ? netResult > 0
-        ? { label: `YOU WIN  +${netResult.toLocaleString()} ${currencyLabel}`, cls: "text-green-300 border-green-400/40 bg-green-500/10" }
+        ? { label: `YOU WIN  +${netResult.toLocaleString()} ${unitLabel}`, cls: "text-green-300 border-green-400/40 bg-green-500/10" }
         : netResult < 0
-        ? { label: `DEALER WINS  ${netResult.toLocaleString()} ${currencyLabel}`, cls: "text-red-300 border-red-400/40 bg-red-500/10" }
+        ? { label: `DEALER WINS  ${netResult.toLocaleString()} ${unitLabel}`, cls: "text-red-300 border-red-400/40 bg-red-500/10" }
         : { label: "PUSH — Bet Returned", cls: "text-yellow-300 border-yellow-400/40 bg-yellow-500/10" }
       : null;
 
@@ -312,7 +576,17 @@ export default function Blackjack() {
           <div>
             <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
             <div className="font-cinzel font-bold text-lg text-yellow-300">
-              {showBalance ? <>{balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span></> : <span className="text-purple-300/40">—</span>}
+              {isReal ? (
+                connected ? (
+                  <>{realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span></>
+                ) : (
+                  <span className="text-purple-300/40">—</span>
+                )
+              ) : showBalance ? (
+                <>{balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span></>
+              ) : (
+                <span className="text-purple-300/40">—</span>
+              )}
             </div>
           </div>
           <AnimatePresence>
@@ -327,7 +601,7 @@ export default function Blackjack() {
                   {isSplit ? "Total Bet" : "Current Bet"}
                 </div>
                 <div className="font-cinzel font-bold text-lg text-white">
-                  {totalStaked.toLocaleString()} <span className="text-xs text-purple-300/60">{currencyLabel}</span>
+                  {totalStaked.toLocaleString()} <span className="text-xs text-purple-300/60">{unitLabel}</span>
                 </div>
               </motion.div>
             )}
@@ -430,48 +704,73 @@ export default function Blackjack() {
 
         {/* ── Bottom control panel ── */}
         <div className="border-t border-purple-500/15 bg-black/20 px-5 py-4">
+          {chainError && (
+            <div className="mb-3 text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+              {chainError}
+            </div>
+          )}
           <AnimatePresence mode="wait">
 
-            {/* BETTING state — real-mode gate (connect/deposit) or bet selector + Deal */}
-            {gameState === "betting" && gated && (
+            {/* BETTING state — real-mode gate (connect wallet) or bet selector + Deal */}
+            {gameState === "betting" && isReal && !connected && (
               <motion.div
                 key="betting-gate"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
               >
-                <WalletGateNotice reason={gateReason} />
+                <WalletGateNotice reason="wallet" />
               </motion.div>
             )}
-            {gameState === "betting" && !gated && (
+            {gameState === "betting" && (!isReal || connected) && (
               <motion.div
                 key="betting-controls"
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
-                className="flex items-end gap-3"
+                className="flex flex-col gap-3"
               >
-                {/* Bet controls */}
-                <div className="flex-1">
-                  <BetControls value={betInput} onChange={setBetInput} max={balance} />
-                </div>
+                {isReal && (
+                  <TokenSelector value={realToken} onChange={setRealToken} />
+                )}
+                <div className="flex items-end gap-3">
+                  {/* Bet controls */}
+                  <div className="flex-1">
+                    {isReal ? (
+                      <BetControls value={realBetAmount} onChange={setRealBetAmount} max={realBalanceHuman} unitLabel={realToken} />
+                    ) : (
+                      <BetControls value={betInput} onChange={setBetInput} max={balance} />
+                    )}
+                  </div>
 
-                {/* Deal button */}
-                <motion.button
-                  whileHover={canDeal ? { scale: 1.04, y: -1 } : {}}
-                  whileTap={canDeal ? { scale: 0.96 } : {}}
-                  onClick={deal}
-                  disabled={!canDeal}
-                  className="shrink-0 px-7 py-[2.65rem] rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-b from-purple-500 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  data-testid="button-deal"
-                >
-                  DEAL
-                </motion.button>
+                  {/* Deal button */}
+                  <motion.button
+                    whileHover={(isReal ? canDealReal : canDeal) ? { scale: 1.04, y: -1 } : {}}
+                    whileTap={(isReal ? canDealReal : canDeal) ? { scale: 0.96 } : {}}
+                    onClick={deal}
+                    disabled={isReal ? !canDealReal : !canDeal}
+                    className="shrink-0 px-7 py-[2.65rem] rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-b from-purple-500 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    data-testid="button-deal"
+                  >
+                    {isReal && actionPending ? "..." : "DEAL"}
+                  </motion.button>
+                </div>
               </motion.div>
             )}
 
-            {/* PLAYING state — Hit / Stand / Double / Split */}
-            {gameState === "playing" && (
+            {/* PLAYING state — Hit / Stand / Double / Split, or awaiting on-chain settlement */}
+            {gameState === "playing" && awaitingSettlement && (
+              <motion.div
+                key="settling"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                className="text-center py-4 text-sm text-purple-300/70 font-cinzel tracking-widest uppercase"
+              >
+                Settling round on-chain…
+              </motion.div>
+            )}
+            {gameState === "playing" && !awaitingSettlement && (
               <motion.div
                 key="play-controls"
                 initial={{ opacity: 0, y: 8 }}
@@ -480,19 +779,21 @@ export default function Blackjack() {
                 className="grid grid-cols-2 gap-3"
               >
                 <motion.button
-                  whileHover={{ scale: 1.03, y: -1 }}
-                  whileTap={{ scale: 0.97 }}
+                  whileHover={!actionPending ? { scale: 1.03, y: -1 } : {}}
+                  whileTap={!actionPending ? { scale: 0.97 } : {}}
                   onClick={hit}
-                  className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 transition-all"
+                  disabled={isReal && actionPending}
+                  className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   data-testid="button-hit"
                 >
                   Hit
                 </motion.button>
                 <motion.button
-                  whileHover={{ scale: 1.03, y: -1 }}
-                  whileTap={{ scale: 0.97 }}
+                  whileHover={!actionPending ? { scale: 1.03, y: -1 } : {}}
+                  whileTap={!actionPending ? { scale: 0.97 } : {}}
                   onClick={stand}
-                  className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase glass border border-yellow-400/40 text-yellow-300 hover:border-yellow-400/70 transition-all"
+                  disabled={isReal && actionPending}
+                  className="py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase glass border border-yellow-400/40 text-yellow-300 hover:border-yellow-400/70 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                   data-testid="button-stand"
                 >
                   Stand
