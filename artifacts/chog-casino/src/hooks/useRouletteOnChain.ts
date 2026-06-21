@@ -13,10 +13,12 @@ import {
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
 /**
- * BetKind enum matching the Roulette.sol contract:
- * 0 = Red, 1 = Black, 2 = Green, 3 = Odd, 4 = Even, 5 = Low(1-18), 6 = High(19-36), 7 = StraightNumber
+ * BetKind enum matching Roulette.sol's actual declaration order exactly:
+ * 0 = StraightNumber, 1 = Red, 2 = Black, 3 = Odd, 4 = Even, 5 = Low(1-18), 6 = High(19-36).
+ * There is no separate "Green" value — the 0 pocket is a StraightNumber bet on number 0,
+ * same 36x payout as every other single-number bet.
  */
-export type BetKind = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type BetKind = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 const ROULETTE_ABI = [
   {

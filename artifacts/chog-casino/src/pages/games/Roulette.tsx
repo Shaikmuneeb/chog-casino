@@ -229,11 +229,14 @@ export default function Roulette() {
       setChainError(null);
       setRealPayout(null);
 
-      // Map betType to BetKind enum
+      // Map betType to Roulette.sol's actual BetKind enum: StraightNumber=0, Red=1, Black=2,
+      // Odd=3, Even=4, Low=5, High=6 — "green" (the 0 pocket) is just a StraightNumber bet on
+      // 0, not its own enum value (matches every other single-number bet's 36x payout).
       const betKindMap: Record<string, BetKind> = {
-        red: 0, black: 1, green: 2, odd: 3, even: 4, "1-18": 5, "19-36": 6,
+        red: 1, black: 2, odd: 3, even: 4, "1-18": 5, "19-36": 6,
       };
-      const kind: BetKind = typeof betType === "number" ? 7 : betKindMap[betType] ?? 0;
+      const isStraight = typeof betType === "number" || betType === "green";
+      const kind: BetKind = isStraight ? 0 : betKindMap[betType] ?? 0;
       const straightNumber = typeof betType === "number" ? betType : 0;
 
       // Start animation
