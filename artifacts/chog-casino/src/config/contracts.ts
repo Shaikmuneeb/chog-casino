@@ -29,9 +29,7 @@ export const CONTRACTS = {
   mines: "0xa5Ac542aF5d8381a2Ee174a87D8874De2693C819" as `0x${string}`,
   crash: "0x83B779059B82f149F86e96B04c9700bb15b45a63" as `0x${string}`,
   blackjack: "0x4e05B532c7bf3250979265cB096A39E1A344d3da" as `0x${string}`,
-  // Not deployed yet — run contracts/script/DeployCustodialVault.s.sol, then paste the address
-  // here. Every custodial-deposit UI element checks isDeployed(CONTRACTS.custodialVault) first.
-  custodialVault: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+  custodialVault: "0xEe0ACC9B3C3C5A3582063c681E1Ce0aDDc13782a" as `0x${string}`,
 };
 
 export function isDeployed(address: `0x${string}`): boolean {
