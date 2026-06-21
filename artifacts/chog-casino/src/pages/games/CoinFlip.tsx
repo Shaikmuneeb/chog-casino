@@ -1,9 +1,16 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
 import WalletGateNotice from "@/components/WalletGateNotice";
+import TokenSelector from "@/components/TokenSelector";
 import { useGameBalance } from "@/hooks/useGameBalance";
+import { useGameMode } from "@/context/GameModeContext";
+import { useWallet } from "@/hooks/useWallet";
+import { useCoinFlipOnChain } from "@/hooks/useCoinFlipOnChain";
+import { publicClient } from "@/lib/casinoClient";
+import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811951344.png";
 import headsImg from "@assets/chog_heads_side_1781813831765.png";
 import tailsImg from "@assets/image_1781850363283.png";
@@ -11,7 +18,7 @@ import tailsImg from "@assets/image_1781850363283.png";
 type Side = "heads" | "tails";
 type Phase = "idle" | "spinning" | "result";
 
-const SPIN_DURATION = 2.0; // seconds
+const SPIN_DURATION = 2.0; // seconds — fun mode only; real mode spins until the chain resolves
 
 // ── Web Audio ─────────────────────────────────────────────────────────────────
 function getCtx() {
@@ -72,26 +79,111 @@ const spinKeyframes = Array.from({ length: FLIPS * 2 + 1 }, (_, i) =>
 );
 
 export default function CoinFlip() {
+  const { mode } = useGameMode();
+  const isReal = mode === "real";
+  const { address, connected } = useWallet();
+
   const [bet, setBet] = useState(100);
   const [choice, setChoice] = useState<Side>("heads");
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<Side | null>(null);
   const [won, setWon] = useState<boolean | null>(null);
-  const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
+  const { balance, updateBalance, resetBalance, showBalance, currencyLabel } = useGameBalance();
   // which image to show — alternates heads/tails on every flip so both faces are seen mid-spin
   const [displaySide, setDisplaySide] = useState<Side>("heads");
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const flickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Real-mode on-chain state ──
+  const [realToken, setRealToken] = useState<SupportedToken>("MON");
+  const [realBetAmount, setRealBetAmount] = useState(1);
+  const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
+  const [chainError, setChainError] = useState<string | null>(null);
+  const [realPayout, setRealPayout] = useState<bigint | null>(null);
+  const { status: chainStatus, placeBet: placeBetOnChain } = useCoinFlipOnChain();
+  const deployed = isDeployed(CONTRACTS.coinFlip) && isDeployed(CONTRACTS.treasury);
+
+  useEffect(() => {
+    if (!isReal || !connected || !address) return;
+    let cancelled = false;
+    async function load() {
+      const info = TOKENS[realToken];
+      const raw =
+        realToken === "MON"
+          ? await publicClient.getBalance({ address: address as `0x${string}` })
+          : ((await publicClient.readContract({
+              address: info.address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [address as `0x${string}`],
+            })) as bigint);
+      if (!cancelled) setRealBalanceRaw(raw);
+    }
+    load();
+    const id = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isReal, connected, address, realToken]);
+
+  const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
+
+  // Switching between Real/Fun must not leak the other mode's stale result onto screen.
+  useEffect(() => {
+    setPhase("idle");
+    setResult(null);
+    setWon(null);
+    setChainError(null);
+    setRealPayout(null);
+  }, [isReal]);
 
   const betAmount = bet;
   // 1.96x total payout on a win (2% house edge): EV = 0.5*1.96 - 0.5*1 = -0.02
   const winProfit = Math.round(betAmount * 0.96);
-  const canFlip = phase !== "spinning" && !gated && betAmount > 0 && betAmount <= balance;
+  const canFlip = isReal
+    ? phase !== "spinning" && connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman
+    : phase !== "spinning" && betAmount > 0 && betAmount <= balance;
 
   useEffect(() => {
-    return () => timersRef.current.forEach(clearTimeout);
+    return () => {
+      timersRef.current.forEach(clearTimeout);
+      if (flickerRef.current) clearInterval(flickerRef.current);
+    };
   }, []);
 
-  const flip = useCallback(() => {
+  const flipReal = useCallback(async () => {
+    if (!canFlip) return;
+    setChainError(null);
+    setPhase("spinning");
+    setResult(null);
+    setWon(null);
+    setRealPayout(null);
+    setDisplaySide("heads");
+    playSpin();
+
+    flickerRef.current = setInterval(() => {
+      setDisplaySide((prev) => (prev === "heads" ? "tails" : "heads"));
+    }, 220);
+
+    try {
+      const outcome = await placeBetOnChain(realToken, String(realBetAmount), choice === "heads");
+      if (flickerRef.current) clearInterval(flickerRef.current);
+      const landed: Side = outcome.landedHeads ? "heads" : "tails";
+      setDisplaySide(landed);
+      setResult(landed);
+      setWon(outcome.won);
+      setRealPayout(outcome.payoutAmount);
+      setPhase("result");
+      outcome.won ? playWin() : playLose();
+    } catch (err) {
+      if (flickerRef.current) clearInterval(flickerRef.current);
+      setChainError(err instanceof Error ? err.message : "Bet failed");
+      setPhase("idle");
+    }
+  }, [canFlip, choice, placeBetOnChain, realToken, realBetAmount]);
+
+  const flipFun = useCallback(() => {
     if (!canFlip) return;
 
     const outcome: Side = Math.random() < 0.5 ? "heads" : "tails";
@@ -128,7 +220,21 @@ export default function CoinFlip() {
     );
   }, [canFlip, choice, betAmount, winProfit, updateBalance]);
 
+  const flip = isReal ? flipReal : flipFun;
+
   const coinImg = displaySide === "heads" ? headsImg : tailsImg;
+
+  const realPayoutLabel = realPayout !== null ? formatUnits(realPayout, TOKENS[realToken].decimals) : null;
+
+  if (isReal && !deployed) {
+    return (
+      <GameLayout title="COIN FLIP" subtitle="Double or Nothing" bgImage={bgImage} accentColor="text-neon-gold">
+        <div className="glass rounded-2xl border border-yellow-500/20 p-6 text-center text-sm text-purple-300/60" data-testid="coinflip-not-deployed">
+          Contracts not deployed yet
+        </div>
+      </GameLayout>
+    );
+  }
 
   return (
     <GameLayout
@@ -141,7 +247,16 @@ export default function CoinFlip() {
 
         {/* Balance row */}
         <div className="flex items-center justify-between px-1">
-          {showBalance ? (
+          {isReal ? (
+            connected ? (
+              <div>
+                <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">Wallet Balance</div>
+                <div className="font-cinzel font-bold text-xl text-yellow-300">
+                  {realBalanceHuman.toLocaleString()} <span className="text-sm text-yellow-400/60">{realToken}</span>
+                </div>
+              </div>
+            ) : <div />
+          ) : showBalance ? (
             <div>
               <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">Balance</div>
               <motion.div
@@ -157,14 +272,20 @@ export default function CoinFlip() {
           <AnimatePresence mode="wait">
             {won !== null && phase === "result" && (
               <motion.div
-                key={String(won) + betAmount}
+                key={String(won) + betAmount + String(realPayoutLabel)}
                 initial={{ opacity: 0, x: 16, scale: 0.8 }}
                 animate={{ opacity: 1, x: 0, scale: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 className={`font-cinzel font-bold text-base tracking-wider ${won ? "text-green-400" : "text-red-400"}`}
               >
-                {won ? `+${winProfit.toLocaleString()}` : `-${betAmount.toLocaleString()}`} {currencyLabel}
+                {isReal
+                  ? won
+                    ? `+${realPayoutLabel} ${realToken}`
+                    : `-${realBetAmount} ${realToken}`
+                  : won
+                  ? `+${winProfit.toLocaleString()} ${currencyLabel}`
+                  : `-${betAmount.toLocaleString()} ${currencyLabel}`}
               </motion.div>
             )}
           </AnimatePresence>
@@ -194,14 +315,22 @@ export default function CoinFlip() {
               alt={displaySide}
               animate={
                 phase === "spinning"
-                  ? {
-                      scaleX: spinKeyframes,
-                      filter: [
-                        "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
-                        "brightness(1.4) drop-shadow(0 0 30px rgba(212,175,55,1))",
-                        "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
-                      ],
-                    }
+                  ? isReal
+                    ? {
+                        scaleX: [1, 0.04, 1, 0.04, 1],
+                        filter: [
+                          "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
+                          "brightness(1.4) drop-shadow(0 0 30px rgba(212,175,55,1))",
+                        ],
+                      }
+                    : {
+                        scaleX: spinKeyframes,
+                        filter: [
+                          "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
+                          "brightness(1.4) drop-shadow(0 0 30px rgba(212,175,55,1))",
+                          "brightness(1) drop-shadow(0 0 16px rgba(212,175,55,0.6))",
+                        ],
+                      }
                   : {
                       scaleX: 1,
                       filter:
@@ -214,10 +343,12 @@ export default function CoinFlip() {
               }
               transition={
                 phase === "spinning"
-                  ? {
-                      scaleX: { duration: SPIN_DURATION, ease: "linear" },
-                      filter: { duration: SPIN_DURATION, repeat: 0 },
-                    }
+                  ? isReal
+                    ? { duration: 0.45, repeat: Infinity, ease: "linear" }
+                    : {
+                        scaleX: { duration: SPIN_DURATION, ease: "linear" },
+                        filter: { duration: SPIN_DURATION, repeat: 0 },
+                      }
                   : { duration: 0.35, ease: "easeOut" }
               }
               className="w-full h-full object-contain rounded-full"
@@ -261,7 +392,15 @@ export default function CoinFlip() {
                   transition={{ duration: 0.7, repeat: Infinity }}
                   className="font-cinzel text-sm tracking-[0.3em] text-yellow-400/70 uppercase"
                 >
-                  Flipping…
+                  {isReal
+                    ? chainStatus === "approving"
+                      ? "Approving…"
+                      : chainStatus === "committing"
+                      ? "Preparing Bet…"
+                      : chainStatus === "pending"
+                      ? "Placing Bet…"
+                      : "Awaiting Result…"
+                    : "Flipping…"}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -294,14 +433,32 @@ export default function CoinFlip() {
           ))}
         </div>
 
-        {/* Bet controls */}
-        <BetControls value={bet} onChange={setBet} max={balance} disabled={phase === "spinning"} />
+        {/* Real mode: token selector */}
+        {isReal && connected && (
+          <TokenSelector value={realToken} onChange={setRealToken} />
+        )}
 
-        {/* Real mode: connect wallet / deposit gate */}
-        {gated && <WalletGateNotice reason={gateReason} />}
+        {/* Bet controls */}
+        {isReal ? (
+          connected && (
+            <BetControls
+              value={realBetAmount}
+              onChange={setRealBetAmount}
+              max={Math.max(1, realBalanceHuman)}
+              disabled={phase === "spinning"}
+              step={1}
+              unitLabel={realToken}
+            />
+          )
+        ) : (
+          <BetControls value={bet} onChange={setBet} max={balance} disabled={phase === "spinning"} />
+        )}
+
+        {/* Real mode: connect wallet gate */}
+        {isReal && !connected && <WalletGateNotice reason="wallet" />}
 
         {/* Primary action */}
-        {!gated && (
+        {(!isReal || connected) && (
           <motion.button
             whileHover={canFlip ? { scale: 1.03, y: -2 } : {}}
             whileTap={canFlip ? { scale: 0.97 } : {}}
@@ -310,11 +467,23 @@ export default function CoinFlip() {
             className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.25em] uppercase bg-gradient-to-r from-yellow-500 to-yellow-700 text-black neon-gold border border-yellow-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
             data-testid="button-flip-coin"
           >
-            {phase === "spinning" ? "Flipping…" : balance <= 0 ? `Out of ${currencyLabel}` : "Bet"}
+            {phase === "spinning"
+              ? "Flipping…"
+              : isReal
+              ? realBalanceHuman <= 0
+                ? `Out of ${realToken}`
+                : "Bet"
+              : balance <= 0
+              ? `Out of ${currencyLabel}`
+              : "Bet"}
           </motion.button>
         )}
 
-        {balance <= 0 && phase !== "spinning" && !gated && (
+        {isReal && chainError && (
+          <p className="text-xs text-red-400/80" data-testid="coinflip-chain-error">{chainError}</p>
+        )}
+
+        {!isReal && balance <= 0 && phase !== "spinning" && (
           <motion.button
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

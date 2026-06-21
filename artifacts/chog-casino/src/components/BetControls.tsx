@@ -6,10 +6,11 @@ interface BetControlsProps {
   max: number;
   disabled?: boolean;
   step?: number;
+  unitLabel?: string;
 }
 
 
-export default function BetControls({ value, onChange, max, disabled = false, step = 50 }: BetControlsProps) {
+export default function BetControls({ value, onChange, max, disabled = false, step = 50, unitLabel = "$CHOG" }: BetControlsProps) {
   const set = (n: number) => onChange(Math.max(1, Math.min(max, Math.round(n))));
 
   const btn = "flex items-center justify-center rounded-lg font-cinzel font-black text-xs tracking-wider transition-all duration-150 border disabled:opacity-40 disabled:cursor-not-allowed select-none";
@@ -33,7 +34,7 @@ export default function BetControls({ value, onChange, max, disabled = false, st
           <span className="font-cinzel font-black text-lg text-white tabular-nums truncate">
             {value.toLocaleString()}
           </span>
-          <span className="text-xs text-yellow-400/70 font-medium shrink-0">$CHOG</span>
+          <span className="text-xs text-yellow-400/70 font-medium shrink-0">{unitLabel}</span>
         </div>
 
         {/* + */}
