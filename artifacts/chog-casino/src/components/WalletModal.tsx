@@ -342,14 +342,15 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
                     </button>
                   </div>
 
-                  {/* Connected wallet token list */}
+                  {/* In-game (deposited) token list — this is the spendable balance used for
+                      betting, not the connected wallet's own on-chain balance. */}
                   <div className="space-y-1">
                     <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-2 px-1">
-                      Connected Wallet Tokens
+                      In-Game Wallet Tokens
                     </div>
                     {(Object.keys(TOKENS) as SupportedToken[]).map((symbol) => {
                       const token = TOKENS[symbol];
-                      const bal = balances[symbol];
+                      const bal = vaultBalances[symbol];
                       const formatted = bal !== undefined ? formatUnits(bal, token.decimals) : "—";
                       const usdVal = bal !== undefined ? getUsdValue(symbol, bal) : null;
 
