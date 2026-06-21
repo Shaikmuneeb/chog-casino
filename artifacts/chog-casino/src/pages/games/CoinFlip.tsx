@@ -83,6 +83,8 @@ export default function CoinFlip() {
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const betAmount = bet;
+  // 1.96x total payout on a win (2% house edge): EV = 0.5*1.96 - 0.5*1 = -0.02
+  const winProfit = Math.round(betAmount * 0.96);
   const canFlip = phase !== "spinning" && !gated && betAmount > 0 && betAmount <= balance;
 
   useEffect(() => {
@@ -119,12 +121,12 @@ export default function CoinFlip() {
       setTimeout(() => {
         setResult(outcome);
         setWon(didWin);
-        updateBalance((b) => didWin ? b + betAmount : b - betAmount);
+        updateBalance((b) => didWin ? b + winProfit : b - betAmount);
         setPhase("result");
         didWin ? playWin() : playLose();
       }, SPIN_DURATION * 1000),
     );
-  }, [canFlip, choice, betAmount, updateBalance]);
+  }, [canFlip, choice, betAmount, winProfit, updateBalance]);
 
   const coinImg = displaySide === "heads" ? headsImg : tailsImg;
 
@@ -162,7 +164,7 @@ export default function CoinFlip() {
                 transition={{ type: "spring", stiffness: 400, damping: 20 }}
                 className={`font-cinzel font-bold text-base tracking-wider ${won ? "text-green-400" : "text-red-400"}`}
               >
-                {won ? "+" : "-"}{betAmount.toLocaleString()} $CHOG
+                {won ? `+${winProfit.toLocaleString()}` : `-${betAmount.toLocaleString()}`} {currencyLabel}
               </motion.div>
             )}
           </AnimatePresence>

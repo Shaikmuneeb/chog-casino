@@ -94,7 +94,8 @@ function calcMultiplier(safe: number, mines: number): number {
   for (let i = 0; i < safe; i++) {
     mult *= (GRID_SIZE - mines - i) / (GRID_SIZE - i);
   }
-  return parseFloat((1 / mult).toFixed(2));
+  // 1/mult is the fair (0-edge) multiplier; scale by 0.99 for a 1% house edge.
+  return parseFloat(((0.99 / mult)).toFixed(2));
 }
 
 const MINE_OPTIONS = Array.from({ length: 25 }, (_, i) => i + 1);

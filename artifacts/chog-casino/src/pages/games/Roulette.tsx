@@ -111,8 +111,9 @@ function getColor(n: number): "red" | "black" | "green" {
 }
 
 function getMultiplier(betType: BetType): number {
+  // Single-number bets (incl. green/0) are 1/37 odds — 36x total payout for a 2.7% house edge.
   if (typeof betType === "number") return 36;
-  if (betType === "green") return 35;
+  if (betType === "green") return 36;
   return 2;
 }
 
