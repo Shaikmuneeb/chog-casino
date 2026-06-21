@@ -741,9 +741,7 @@ export default function Aviator() {
               }`}
               data-testid="button-place-bet"
             >
-              {betPlaced
-                ? `Bet Placed — ${bet.toLocaleString()} ${currencyLabel}`
-                : `Bet ${bet.toLocaleString()} ${currencyLabel}`}
+              {betPlaced ? "Bet Placed" : "Bet"}
             </motion.button>
           ) : null}
 

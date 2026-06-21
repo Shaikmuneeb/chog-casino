@@ -94,6 +94,6 @@ export function useGameBalance() {
     gateReason,
     showBalance,
     defaultBalance: def,
-    currencyLabel: mode === "real" ? "$CHOG" : "FUN",
+    currencyLabel: mode === "real" ? "$CHOG" : "CHOG",
   };
 }

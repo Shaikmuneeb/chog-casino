@@ -627,7 +627,7 @@ export default function Dice() {
                 ? "Rolling…"
                 : controlTab === "auto" && autoBet
                 ? `Start Auto (${autoRolls})`
-                : `Bet ${bet.toLocaleString()} ${currencyLabel}`}
+                : "Bet"}
             </motion.button>
           )}
 
