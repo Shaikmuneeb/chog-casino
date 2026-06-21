@@ -6,6 +6,15 @@ import { config, type GameName } from "./config.js";
 import { getLiveCards } from "./blackjackWatcher.js";
 import { DepositStore } from "./depositStore.js";
 import { getOrCreateDepositAddress } from "./depositWatcher.js";
+import {
+  placeCoinFlipBet,
+  placeDiceBet,
+  placeRouletteBet,
+  placeMinesBet,
+  placeCrashBet,
+  getVaultBetResult,
+  VaultBetError,
+} from "./vaultBet.js";
 
 const GAME_NAMES: (GameName | "blackjack")[] = [...Object.keys(config.games), "blackjack"] as (GameName | "blackjack")[];
 
@@ -71,6 +80,124 @@ export function startServer(store: SeedStore, depositStore: DepositStore) {
     }
     const depositAddress = getOrCreateDepositAddress(depositStore, owner as Address);
     res.json({ depositAddress });
+  });
+
+  /**
+   * Instant, signature-free CoinFlip bet funded by the player's CustodialVault balance — see
+   * vaultBet.ts for the full safety ordering (bet placed before debit, never the reverse).
+   */
+  app.post("/vault-bet/coinFlip/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const wantsHeads = req.body?.wantsHeads as boolean | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (typeof wantsHeads !== "boolean") return res.status(400).json({ error: "wantsHeads must be a boolean" });
+
+      const result = await placeCoinFlipBet(store, owner as Address, token as Address, BigInt(amountWei), wantsHeads);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/coinFlip/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.post("/vault-bet/dice/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const target = req.body?.target as number | undefined;
+      const isUnder = req.body?.isUnder as boolean | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (typeof target !== "number") return res.status(400).json({ error: "target must be a number" });
+      if (typeof isUnder !== "boolean") return res.status(400).json({ error: "isUnder must be a boolean" });
+
+      const result = await placeDiceBet(store, owner as Address, token as Address, BigInt(amountWei), target, isUnder);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/dice/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.post("/vault-bet/roulette/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const kind = req.body?.kind as number | undefined;
+      const number_ = req.body?.number as number | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (typeof kind !== "number") return res.status(400).json({ error: "kind must be a number" });
+      if (typeof number_ !== "number") return res.status(400).json({ error: "number must be a number" });
+
+      const result = await placeRouletteBet(store, owner as Address, token as Address, BigInt(amountWei), kind, number_);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/roulette/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.post("/vault-bet/mines/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const picks = req.body?.picks as number | undefined;
+      const mineCount = req.body?.mineCount as number | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (typeof picks !== "number") return res.status(400).json({ error: "picks must be a number" });
+      if (typeof mineCount !== "number") return res.status(400).json({ error: "mineCount must be a number" });
+
+      const result = await placeMinesBet(store, owner as Address, token as Address, BigInt(amountWei), picks, mineCount);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/mines/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.post("/vault-bet/crash/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const autoCashoutBps = req.body?.autoCashoutBps as string | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (!autoCashoutBps) return res.status(400).json({ error: "autoCashoutBps is required" });
+
+      const result = await placeCrashBet(store, owner as Address, token as Address, BigInt(amountWei), BigInt(autoCashoutBps));
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/crash/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  /** Polled by the frontend after placing a vault-funded bet — no wallet event watching needed
+   *  client-side, since there's no wallet involved in a vault-funded bet at all. */
+  app.get("/vault-bet/:game/:betRef/result", (req, res) => {
+    const result = getVaultBetResult(store, req.params.game, req.params.betRef);
+    if (!result) return res.status(404).json({ error: "bet not found" });
+    res.json(result);
   });
 
   app.get("/health", (_req, res) => res.json({ ok: true }));

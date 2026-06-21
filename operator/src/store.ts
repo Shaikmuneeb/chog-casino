@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 
 export interface SeedRecord {
   serverSeed: Hex;
@@ -12,6 +12,20 @@ export interface SeedRecord {
   /** Set once revealAndResolve has actually been submitted, so we never reveal twice. */
   resolved: boolean;
   createdAt: number;
+  /** Set only for instant vault-funded bets (see server.ts's /vault-bet routes) — the
+   *  operator's own wallet placed this bet on `vaultOwner`'s behalf, having already debited
+   *  their CustodialVault balance for the stake. On resolution, if the bet won, the watcher
+   *  credits the payout back to this address instead of doing nothing (wallet-direct bets
+   *  leave this undefined and are paid out directly by the contract to the player's wallet). */
+  vaultOwner?: Address;
+  /** Set once a win's payout has been credited back to vaultOwner, so a restart can't double-credit. */
+  vaultCredited?: boolean;
+  /** The revealAndResolve transaction hash — lets a restart re-fetch this exact receipt to
+   *  finish a vault credit that didn't complete, instead of scanning chain history. */
+  resolveTxHash?: Hex;
+  /** Decoded outcome of a vault-funded bet, recorded once resolved — lets GET
+   *  /vault-bet/:game/:betRef/result answer without re-decoding the chain on every poll. */
+  vaultOutcome?: { won: boolean; payoutAmount: string; token: Address };
 }
 
 /**
@@ -61,10 +75,19 @@ export class SeedStore {
     this.flush();
   }
 
-  markResolved(commitment: Hex) {
+  markResolved(commitment: Hex, resolveTxHash?: Hex) {
     const record = this.findByCommitment(commitment);
     if (!record) return;
     record.resolved = true;
+    if (resolveTxHash) record.resolveTxHash = resolveTxHash;
+    this.flush();
+  }
+
+  markVaultCredited(commitment: Hex, outcome?: SeedRecord["vaultOutcome"]) {
+    const record = this.findByCommitment(commitment);
+    if (!record) return;
+    record.vaultCredited = true;
+    if (outcome) record.vaultOutcome = outcome;
     this.flush();
   }
 
@@ -72,6 +95,12 @@ export class SeedStore {
    *  to resume any reveals that were interrupted by a restart. */
   pendingReveals(): SeedRecord[] {
     return this.records.filter((r) => r.betRef && !r.resolved);
+  }
+
+  /** Vault-funded bets that resolved but never got their winning payout credited back —
+   *  resumed on restart so a crash mid-credit can't strand a player's winnings. */
+  pendingVaultCredits(): SeedRecord[] {
+    return this.records.filter((r) => r.vaultOwner && r.resolved && !r.vaultCredited);
   }
 
   /** Records not yet matched to an on-chain bet/round — used on startup to resume watching

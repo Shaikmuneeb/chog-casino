@@ -10,7 +10,7 @@ import { useGameMode } from "@/context/GameModeContext";
 import { useWallet } from "@/hooks/useWallet";
 import { useCoinFlipOnChain } from "@/hooks/useCoinFlipOnChain";
 import { publicClient } from "@/lib/casinoClient";
-import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
+import { CUSTODIAL_VAULT_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811951344.png";
 import headsImg from "@assets/chog_heads_side_1781813831765.png";
 import tailsImg from "@assets/image_1781850363283.png";
@@ -100,27 +100,25 @@ export default function CoinFlip() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBet: placeBetOnChain } = useCoinFlipOnChain();
-  const deployed = isDeployed(CONTRACTS.coinFlip) && isDeployed(CONTRACTS.treasury);
+  const { status: chainStatus, placeBetFromVault } = useCoinFlipOnChain();
+  const deployed = isDeployed(CONTRACTS.coinFlip) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
+  // Real-mode balance is the player's CustodialVault (in-game) balance, not their wallet's —
+  // bets are instant and signature-free, funded entirely from what they've deposited.
   useEffect(() => {
     if (!isReal || !connected || !address) return;
     let cancelled = false;
     async function load() {
-      const info = TOKENS[realToken];
-      const raw =
-        realToken === "MON"
-          ? await publicClient.getBalance({ address: address as `0x${string}` })
-          : ((await publicClient.readContract({
-              address: info.address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [address as `0x${string}`],
-            })) as bigint);
+      const raw = (await publicClient.readContract({
+        address: CONTRACTS.custodialVault,
+        abi: CUSTODIAL_VAULT_ABI,
+        functionName: "balanceOf",
+        args: [address as `0x${string}`, TOKENS[realToken].address],
+      })) as bigint;
       if (!cancelled) setRealBalanceRaw(raw);
     }
     load();
-    const id = setInterval(load, 15_000);
+    const id = setInterval(load, 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -167,7 +165,7 @@ export default function CoinFlip() {
     }, 220);
 
     try {
-      const outcome = await placeBetOnChain(realToken, String(realBetAmount), choice === "heads");
+      const outcome = await placeBetFromVault(realToken, String(realBetAmount), choice === "heads");
       if (flickerRef.current) clearInterval(flickerRef.current);
       const landed: Side = outcome.landedHeads ? "heads" : "tails";
       setDisplaySide(landed);
@@ -181,7 +179,7 @@ export default function CoinFlip() {
       setChainError(err instanceof Error ? err.message : "Bet failed");
       setPhase("idle");
     }
-  }, [canFlip, choice, placeBetOnChain, realToken, realBetAmount]);
+  }, [canFlip, choice, placeBetFromVault, realToken, realBetAmount]);
 
   const flipFun = useCallback(() => {
     if (!canFlip) return;
@@ -250,7 +248,7 @@ export default function CoinFlip() {
           {isReal ? (
             connected ? (
               <div>
-                <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">Wallet Balance</div>
+                <div className="text-xs text-purple-300/50 tracking-widest uppercase mb-0.5">In-Game Balance</div>
                 <div className="font-cinzel font-bold text-xl text-yellow-300">
                   {realBalanceHuman.toLocaleString()} <span className="text-sm text-yellow-400/60">{realToken}</span>
                 </div>

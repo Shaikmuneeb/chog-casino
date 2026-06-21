@@ -10,7 +10,7 @@ import { useGameMode } from "@/context/GameModeContext";
 import { useWallet } from "@/hooks/useWallet";
 import { useRouletteOnChain, type BetKind } from "@/hooks/useRouletteOnChain";
 import { publicClient } from "@/lib/casinoClient";
-import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
+import { CUSTODIAL_VAULT_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811963908.png";
 
 // ── Web Audio: spinning whoosh, slowing ball ticks, and a win/lose chime ───────
@@ -172,27 +172,24 @@ export default function Roulette() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBet: placeBetOnChain } = useRouletteOnChain();
-  const deployed = isDeployed(CONTRACTS.roulette) && isDeployed(CONTRACTS.treasury);
+  const { status: chainStatus, placeBetFromVault } = useRouletteOnChain();
+  const deployed = isDeployed(CONTRACTS.roulette) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   useEffect(() => {
     if (!isReal || !connected || !address) return;
     let cancelled = false;
     async function load() {
       const info = TOKENS[realToken];
-      const raw =
-        realToken === "MON"
-          ? await publicClient.getBalance({ address: address as `0x${string}` })
-          : ((await publicClient.readContract({
-              address: info.address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [address as `0x${string}`],
-            })) as bigint);
+      const raw = (await publicClient.readContract({
+        address: CONTRACTS.custodialVault,
+        abi: CUSTODIAL_VAULT_ABI,
+        functionName: "balanceOf",
+        args: [address as `0x${string}`, info.address],
+      })) as bigint;
       if (!cancelled) setRealBalanceRaw(raw);
     }
     load();
-    const id = setInterval(load, 15_000);
+    const id = setInterval(load, 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -261,7 +258,7 @@ export default function Roulette() {
       });
 
       try {
-        const outcome = await placeBetOnChain(realToken, String(realBetAmount), kind, straightNumber);
+        const outcome = await placeBetFromVault(realToken, String(realBetAmount), kind, straightNumber);
         timersRef.current.push(setTimeout(() => {
           const won = outcome.won;
           const payout = won ? Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals)) : 0;
@@ -334,7 +331,7 @@ export default function Roulette() {
           {isReal ? (
             connected ? (
               <div>
-                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Wallet Balance</div>
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">In-Game Balance</div>
                 <div className="font-cinzel font-bold text-lg text-yellow-300">
                   {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
                 </div>

@@ -11,7 +11,7 @@ import { useGameMode } from "@/context/GameModeContext";
 import { useWallet } from "@/hooks/useWallet";
 import { useDiceOnChain } from "@/hooks/useDiceOnChain";
 import { publicClient } from "@/lib/casinoClient";
-import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
+import { CUSTODIAL_VAULT_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/dice/dice-cover.png";
 import diceBg from "@assets/dice/dice-bg.png";
 
@@ -131,27 +131,24 @@ export default function Dice() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBet: placeBetOnChain } = useDiceOnChain();
-  const deployed = isDeployed(CONTRACTS.dice) && isDeployed(CONTRACTS.treasury);
+  const { status: chainStatus, placeBetFromVault } = useDiceOnChain();
+  const deployed = isDeployed(CONTRACTS.dice) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   useEffect(() => {
     if (!isReal || !connected || !address) return;
     let cancelled = false;
     async function load() {
       const info = TOKENS[realToken];
-      const raw =
-        realToken === "MON"
-          ? await publicClient.getBalance({ address: address as `0x${string}` })
-          : ((await publicClient.readContract({
-              address: info.address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [address as `0x${string}`],
-            })) as bigint);
+      const raw = (await publicClient.readContract({
+        address: CONTRACTS.custodialVault,
+        abi: CUSTODIAL_VAULT_ABI,
+        functionName: "balanceOf",
+        args: [address as `0x${string}`, info.address],
+      })) as bigint;
       if (!cancelled) setRealBalanceRaw(raw);
     }
     load();
-    const id = setInterval(load, 15_000);
+    const id = setInterval(load, 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -222,7 +219,7 @@ export default function Dice() {
     rollTimersRef.current.push(interval as unknown as ReturnType<typeof setTimeout>);
 
     try {
-      const outcome = await placeBetOnChain(realToken, String(realBetAmount), target, direction === "under");
+      const outcome = await placeBetFromVault(realToken, String(realBetAmount), target, direction === "under");
       clearInterval(interval);
       // The contract resolves the roll — we don't know the exact number, but we know won/lost
       const won = outcome.won;
@@ -256,7 +253,7 @@ export default function Dice() {
       setChainError(err instanceof Error ? err.message : "Bet failed");
     }
     setRolling(false);
-  }, [canRoll, placeBetOnChain, realToken, realBetAmount, target, direction]);
+  }, [canRoll, placeBetFromVault, realToken, realBetAmount, target, direction]);
 
   // Fun-mode: client-side roll
   const doRollFun = useCallback(
@@ -587,7 +584,7 @@ export default function Dice() {
           {isReal ? (
             connected ? (
               <div className="flex items-center justify-between px-1">
-                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Wallet Balance</div>
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">In-Game Balance</div>
                 <div className="font-cinzel font-bold text-lg text-yellow-300">
                   {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
                 </div>

@@ -8,8 +8,11 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @notice Holds custodial per-player balances funded by deposit-address sweeps from the
-/// off-chain operator. Separate from TreasuryContract (the wallet-direct betting bankroll) —
-/// this vault is purely a deposit/withdraw holding pen, not wired into bet placement.
+/// off-chain operator. Separate from TreasuryContract (the wallet-direct betting bankroll).
+/// Also used as the accounting ledger for instant vault-funded bets: the operator's own wallet
+/// fronts a bet's stake on the actual game contract (since those contracts always treat
+/// msg.sender as the player — see Blackjack.sol/BaseGame.sol), and debits/credits this vault
+/// to reflect the real player's win/loss without ever requiring their wallet's signature.
 ///
 /// Security model: only OPERATOR_ROLE (the backend's hot wallet) can credit a player's balance,
 /// after it has verified and swept a real on-chain deposit. But withdrawal is the player's own
@@ -32,6 +35,7 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
     mapping(address => mapping(address => uint256)) public balanceOf;
 
     event Credited(address indexed player, address indexed token, uint256 amount, bytes32 indexed sweepRef);
+    event Debited(address indexed player, address indexed token, uint256 amount, bytes32 indexed betRef);
     event Withdrawn(address indexed player, address indexed token, uint256 amount);
     event AdminWithdraw(address indexed token, address indexed to, uint256 amount);
 
@@ -57,6 +61,22 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
         require(amount > 0, "zero amount");
         balanceOf[player][token] += amount;
         emit Credited(player, token, amount, sweepRef);
+    }
+
+    /// @dev Called by the operator when it's about to front a bet's stake from its own wallet
+    /// on a player's behalf (see operator/src/server.ts's /vault-bet routes). Pure accounting —
+    /// no tokens move here, since the operator's own wallet (not this vault) actually pays the
+    /// game contract. `betRef` is an opaque off-chain reference for audit/event-tracing only.
+    function debit(address player, address token, uint256 amount, bytes32 betRef)
+        external
+        onlyRole(OPERATOR_ROLE)
+        whenNotPaused
+    {
+        require(amount > 0, "zero amount");
+        uint256 bal = balanceOf[player][token];
+        require(bal >= amount, "insufficient balance");
+        balanceOf[player][token] = bal - amount;
+        emit Debited(player, token, amount, betRef);
     }
 
     /// @dev Player-initiated only — msg.sender always pays itself, never anyone else.

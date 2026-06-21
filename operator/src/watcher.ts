@@ -1,7 +1,7 @@
-import type { Address, Hex } from "viem";
-import { publicClient, walletClient } from "./chain.js";
-import { SINGLE_SHOT_GAME_ABI } from "./abi.js";
-import { SeedStore } from "./store.js";
+import { keccak256, parseEventLogs, toHex, type Address, type Hex, type TransactionReceipt } from "viem";
+import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
+import { SINGLE_SHOT_GAME_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
+import { SeedStore, type SeedRecord } from "./store.js";
 import { config, type GameName } from "./config.js";
 
 /**
@@ -36,6 +36,21 @@ export function watchSingleShotGame(game: GameName, address: Address, store: See
     if (record.game !== game) continue;
     void reveal(game, address, BigInt(record.betRef!), store, record.commitment);
   }
+  for (const record of store.pendingVaultCredits()) {
+    if (record.game !== game) continue;
+    void resumeVaultCredit(game, record, store);
+  }
+}
+
+/** Resumes a vault credit that never completed before a restart, by re-fetching the exact
+ *  revealAndResolve receipt (recorded as resolveTxHash) instead of scanning chain history. */
+async function resumeVaultCredit(game: GameName, record: SeedRecord, store: SeedStore) {
+  if (!record.resolveTxHash) {
+    console.error(`[watcher:${game}] commitment ${record.commitment} has no resolveTxHash — cannot resume vault credit, manual check required`);
+    return;
+  }
+  const receipt = await publicClient.getTransactionReceipt({ hash: record.resolveTxHash });
+  await creditVaultIfWon(game, receipt, record, store);
 }
 
 async function handleBetPlaced(game: GameName, address: Address, betId: bigint, store: SeedStore) {
@@ -74,12 +89,55 @@ async function reveal(game: GameName, address: Address, betId: bigint, store: Se
       functionName: "revealAndResolve",
       args: [betId, record.serverSeed],
     });
-    await publicClient.waitForTransactionReceipt({ hash });
-    store.markResolved(commitment);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    store.markResolved(commitment, hash);
     console.log(`[watcher:${game}] resolved bet ${betId} (tx ${hash})`);
+
+    if (record.vaultOwner) {
+      await creditVaultIfWon(game, receipt, record, store);
+    }
   } catch (err) {
     console.error(`[watcher:${game}] failed to reveal bet ${betId}`, err);
   }
+}
+
+/**
+ * For instant vault-funded bets only (record.vaultOwner is set): the operator's own wallet was
+ * msg.sender on placeBet, so the contract just paid US, not the real player. Read the actual
+ * outcome from the BetResolved event this same tx emitted, and if it won, credit the payout
+ * back to the real player's CustodialVault balance. On a loss, nothing happens — their stake
+ * was already debited at bet-placement time (see server.ts's /vault-bet routes).
+ */
+async function creditVaultIfWon(game: GameName, receipt: TransactionReceipt, record: SeedRecord, store: SeedStore) {
+  if (!vaultWalletClient || !config.custodialVault) {
+    console.error(`[watcher:${game}] vault-funded bet resolved but vault operator isn't configured — cannot credit`);
+    return;
+  }
+
+  const [resolvedLog] = parseEventLogs({ abi: SINGLE_SHOT_GAME_ABI, eventName: "BetResolved", logs: receipt.logs });
+  if (!resolvedLog) {
+    console.error(`[watcher:${game}] could not find BetResolved log to credit vault for ${record.commitment}`);
+    return;
+  }
+
+  const { token, payoutAmount, won } = resolvedLog.args;
+  const outcome = { won: !!won, payoutAmount: (payoutAmount ?? 0n).toString(), token: token! };
+
+  if (!won || !payoutAmount || payoutAmount === 0n) {
+    store.markVaultCredited(record.commitment, outcome);
+    return;
+  }
+
+  const betRef = keccak256(toHex(`${record.commitment}-payout`));
+  const hash = await vaultWalletClient.writeContract({
+    address: config.custodialVault,
+    abi: CUSTODIAL_VAULT_ABI,
+    functionName: "credit",
+    args: [record.vaultOwner!, token, payoutAmount, betRef],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  store.markVaultCredited(record.commitment, outcome);
+  console.log(`[watcher:${game}] credited vault-funded win: ${record.vaultOwner} +${payoutAmount} of ${token}`);
 }
 
 export function watchAllSingleShotGames(store: SeedStore) {

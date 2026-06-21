@@ -9,6 +9,7 @@ import {
   TOKENS,
   type SupportedToken,
 } from "@/config/contracts";
+import { postVaultBet, pollVaultBetResult } from "@/lib/vaultBet";
 
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
@@ -146,5 +147,40 @@ export function useCoinFlipOnChain() {
     [address, connected, getWalletClient],
   );
 
-  return { status, setStatus, placeBet };
+  /**
+   * Instant, signature-free bet funded by the player's CustodialVault balance — no wallet
+   * popup anywhere in this path. The operator's own wallet places the bet on-chain and the
+   * outcome is read back by polling, not by watching a wallet-visible event. See
+   * operator/src/vaultBet.ts for the on-chain mechanics and safety ordering.
+   */
+  const placeBetFromVault = useCallback(
+    async (token: SupportedToken, amountHuman: string, wantsHeads: boolean): Promise<CoinFlipOutcome> => {
+      if (!connected || !address) throw new Error("Wallet not connected");
+      const tokenInfo = TOKENS[token];
+      const amount = parseUnits(amountHuman, tokenInfo.decimals);
+
+      setStatus("pending");
+      try {
+        const { betRef } = await postVaultBet("coinFlip", {
+          owner: address,
+          token: tokenInfo.address,
+          amountWei: amount.toString(),
+          wantsHeads,
+        });
+
+        setStatus("awaiting_result");
+        const result = await pollVaultBetResult("coinFlip", betRef);
+        setStatus("idle");
+
+        const won = Boolean(result.won);
+        return { won, landedHeads: won ? wantsHeads : !wantsHeads, payoutAmount: BigInt(result.payoutAmount ?? "0") };
+      } catch (err) {
+        setStatus("idle");
+        throw err;
+      }
+    },
+    [address, connected],
+  );
+
+  return { status, setStatus, placeBet, placeBetFromVault };
 }

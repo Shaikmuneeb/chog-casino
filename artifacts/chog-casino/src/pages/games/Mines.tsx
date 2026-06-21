@@ -10,7 +10,7 @@ import { useGameMode } from "@/context/GameModeContext";
 import { useWallet } from "@/hooks/useWallet";
 import { useMinesOnChain } from "@/hooks/useMinesOnChain";
 import { publicClient } from "@/lib/casinoClient";
-import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
+import { CUSTODIAL_VAULT_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811958820.png";
 import diamondImg from "@assets/chog_mines_diamond_1781814946879.png";
 import bombImg from "@assets/chog_mines_2_1781814964561.png";
@@ -128,8 +128,8 @@ export default function Mines() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBet: placeBetOnChain } = useMinesOnChain();
-  const deployed = isDeployed(CONTRACTS.mines) && isDeployed(CONTRACTS.treasury);
+  const { status: chainStatus, placeBetFromVault } = useMinesOnChain();
+  const deployed = isDeployed(CONTRACTS.mines) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   // Number of picks the player wants (real mode only)
   const [picks, setPicks] = useState(5);
@@ -146,19 +146,16 @@ export default function Mines() {
     let cancelled = false;
     async function load() {
       const info = TOKENS[realToken];
-      const raw =
-        realToken === "MON"
-          ? await publicClient.getBalance({ address: address as `0x${string}` })
-          : ((await publicClient.readContract({
-              address: info.address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [address as `0x${string}`],
-            })) as bigint);
+      const raw = (await publicClient.readContract({
+        address: CONTRACTS.custodialVault,
+        abi: CUSTODIAL_VAULT_ABI,
+        functionName: "balanceOf",
+        args: [address as `0x${string}`, info.address],
+      })) as bigint;
       if (!cancelled) setRealBalanceRaw(raw);
     }
     load();
-    const id = setInterval(load, 15_000);
+    const id = setInterval(load, 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -180,7 +177,7 @@ export default function Mines() {
       setChainError(null);
       setRealPayout(null);
       try {
-        const outcome = await placeBetOnChain(realToken, String(realBetAmount), picks, mineCount);
+        const outcome = await placeBetFromVault(realToken, String(realBetAmount), picks, mineCount);
         setRealPayout(outcome.payoutAmount);
         // Generate a visual grid to show (outcome is determined by contract)
         const newGrid = generateGrid(mineCount);
@@ -360,7 +357,7 @@ export default function Mines() {
           {isReal ? (
             connected ? (
               <div className="flex items-center justify-between px-1">
-                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Wallet Balance</div>
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">In-Game Balance</div>
                 <div className="font-cinzel font-bold text-lg text-yellow-300">
                   {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
                 </div>

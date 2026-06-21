@@ -65,6 +65,59 @@ contract CustodialVaultTest is Test {
         vault.withdraw(NATIVE, 6 ether);
     }
 
+    function test_OperatorCanDebit() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        vm.prank(operator);
+        vault.debit(player, NATIVE, 4 ether, bytes32("bet-1"));
+
+        assertEq(vault.balanceOf(player, NATIVE), 6 ether);
+    }
+
+    function test_DebitDoesNotMoveAnyTokens() public {
+        // debit() is pure accounting — the operator's own wallet fronts the actual bet, so the
+        // vault's real token balance must be untouched by a debit.
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+        uint256 vaultBalBefore = vault.getBalance(NATIVE);
+
+        vm.prank(operator);
+        vault.debit(player, NATIVE, 4 ether, bytes32("bet-1"));
+
+        assertEq(vault.getBalance(NATIVE), vaultBalBefore);
+    }
+
+    function test_NonOperatorCannotDebit() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.debit(player, NATIVE, 1 ether, bytes32("bet-1"));
+    }
+
+    function test_DebitRevertsIfInsufficientBalance() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 5 ether, bytes32("sweep-1"));
+
+        vm.prank(operator);
+        vm.expectRevert("insufficient balance");
+        vault.debit(player, NATIVE, 6 ether, bytes32("bet-1"));
+    }
+
+    function test_PauseBlocksDebit() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        vm.prank(admin);
+        vault.pause();
+
+        vm.prank(operator);
+        vm.expectRevert();
+        vault.debit(player, NATIVE, 1 ether, bytes32("bet-1"));
+    }
+
     function test_CannotWithdrawAnotherPlayersBalance() public {
         vm.prank(operator);
         vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));

@@ -9,6 +9,7 @@ import {
   TOKENS,
   type SupportedToken,
 } from "@/config/contracts";
+import { postVaultBet, pollVaultBetResult } from "@/lib/vaultBet";
 
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
@@ -149,5 +150,36 @@ export function useMinesOnChain() {
     [address, connected, getWalletClient],
   );
 
-  return { status, setStatus, placeBet };
+  /** Instant, signature-free bet funded by the player's CustodialVault balance — no wallet
+   *  popup anywhere in this path. See operator/src/vaultBet.ts for the on-chain mechanics. */
+  const placeBetFromVault = useCallback(
+    async (token: SupportedToken, amountHuman: string, picks: number, mineCount: number): Promise<MinesOutcome> => {
+      if (!connected || !address) throw new Error("Wallet not connected");
+      const tokenInfo = TOKENS[token];
+      const amount = parseUnits(amountHuman, tokenInfo.decimals);
+
+      setStatus("pending");
+      try {
+        const { betRef } = await postVaultBet("mines", {
+          owner: address,
+          token: tokenInfo.address,
+          amountWei: amount.toString(),
+          picks,
+          mineCount,
+        });
+
+        setStatus("awaiting_result");
+        const result = await pollVaultBetResult("mines", betRef);
+        setStatus("idle");
+
+        return { won: Boolean(result.won), payoutAmount: BigInt(result.payoutAmount ?? "0") };
+      } catch (err) {
+        setStatus("idle");
+        throw err;
+      }
+    },
+    [address, connected],
+  );
+
+  return { status, setStatus, placeBet, placeBetFromVault };
 }
