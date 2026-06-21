@@ -1,9 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
+import TokenSelector from "@/components/TokenSelector";
 import WalletGateNotice from "@/components/WalletGateNotice";
 import { useGameBalance } from "@/hooks/useGameBalance";
+import { useGameMode } from "@/context/GameModeContext";
+import { useWallet } from "@/hooks/useWallet";
+import { useRouletteOnChain, type BetKind } from "@/hooks/useRouletteOnChain";
+import { publicClient } from "@/lib/casinoClient";
+import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811963908.png";
 
 // ── Web Audio: spinning whoosh, slowing ball ticks, and a win/lose chime ───────
@@ -145,6 +152,10 @@ function betLabel(b: BetType): string {
 }
 
 export default function Roulette() {
+  const { mode } = useGameMode();
+  const isReal = mode === "real";
+  const { address, connected } = useWallet();
+
   const [bet, setBet] = useState(100);
   const [betType, setBetType] = useState<BetType>("red");
   const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
@@ -155,52 +166,161 @@ export default function Roulette() {
   const [showNumbers, setShowNumbers] = useState(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const canSpin = !spinning && !gated && bet > 0 && bet <= balance;
+  // Real-mode on-chain state
+  const [realToken, setRealToken] = useState<SupportedToken>("MON");
+  const [realBetAmount, setRealBetAmount] = useState(1);
+  const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
+  const [chainError, setChainError] = useState<string | null>(null);
+  const [realPayout, setRealPayout] = useState<bigint | null>(null);
+  const { status: chainStatus, placeBet: placeBetOnChain } = useRouletteOnChain();
+  const deployed = isDeployed(CONTRACTS.roulette) && isDeployed(CONTRACTS.treasury);
+
+  useEffect(() => {
+    if (!isReal || !connected || !address) return;
+    let cancelled = false;
+    async function load() {
+      const info = TOKENS[realToken];
+      const raw =
+        realToken === "MON"
+          ? await publicClient.getBalance({ address: address as `0x${string}` })
+          : ((await publicClient.readContract({
+              address: info.address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [address as `0x${string}`],
+            })) as bigint);
+      if (!cancelled) setRealBalanceRaw(raw);
+    }
+    load();
+    const id = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isReal, connected, address, realToken]);
+
+  const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
+
+  // Reset state on mode switch
+  useEffect(() => {
+    setSpinning(false);
+    setResult(null);
+    setWinAmount(null);
+    setChainError(null);
+    setRealPayout(null);
+  }, [isReal]);
+
+  const canSpin = isReal
+    ? !spinning && connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman
+    : !spinning && !gated && bet > 0 && bet <= balance;
 
   useEffect(() => {
     return () => timersRef.current.forEach(clearTimeout);
   }, []);
 
-  const spin = () => {
+  const spin = async () => {
     if (!canSpin) return;
     setSpinning(true);
     setResult(null);
     setWinAmount(null);
-    updateBalance(b => b - bet);
 
-    const SPIN_MS = 2300;
-    playSpinWhoosh(SPIN_MS / 1000);
-    // Ball clicks past each pocket — closely spaced while fast, spreading out as it slows.
-    const totalTicks = 28;
-    for (let i = 0; i < totalTicks; i++) {
-      const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
-      timersRef.current.push(setTimeout(playTick, t));
+    if (isReal) {
+      // Real mode: place on-chain bet
+      setChainError(null);
+      setRealPayout(null);
+
+      // Map betType to BetKind enum
+      const betKindMap: Record<string, BetKind> = {
+        red: 0, black: 1, green: 2, odd: 3, even: 4, "1-18": 5, "19-36": 6,
+      };
+      const kind: BetKind = typeof betType === "number" ? 7 : betKindMap[betType] ?? 0;
+      const straightNumber = typeof betType === "number" ? betType : 0;
+
+      // Start animation
+      const SPIN_MS = 2300;
+      playSpinWhoosh(SPIN_MS / 1000);
+      const totalTicks = 28;
+      for (let i = 0; i < totalTicks; i++) {
+        const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
+        timersRef.current.push(setTimeout(playTick, t));
+      }
+
+      // Random visual outcome for animation
+      const visualOutcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
+      const slotIndex = WHEEL_ORDER.indexOf(visualOutcome);
+      setRotation(prev => {
+        const prevMod = ((prev % 360) + 360) % 360;
+        const targetMod = slotIndex * SLOT_ANGLE;
+        let delta = targetMod - prevMod;
+        if (delta <= 0) delta += 360;
+        const fullSpins = 5 + Math.floor(Math.random() * 2);
+        return prev + fullSpins * 360 + delta;
+      });
+
+      try {
+        const outcome = await placeBetOnChain(realToken, String(realBetAmount), kind, straightNumber);
+        timersRef.current.push(setTimeout(() => {
+          const won = outcome.won;
+          const payout = won ? Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals)) : 0;
+          setResult(visualOutcome);
+          setWinAmount(won ? payout : -realBetAmount);
+          setRealPayout(outcome.payoutAmount);
+          setSpinning(false);
+          playResultChime(won);
+        }, SPIN_MS));
+      } catch (err) {
+        timersRef.current.push(setTimeout(() => {
+          setChainError(err instanceof Error ? err.message : "Bet failed");
+          setSpinning(false);
+        }, SPIN_MS));
+      }
+    } else {
+      // Fun mode: client-side
+      updateBalance(b => b - bet);
+
+      const SPIN_MS = 2300;
+      playSpinWhoosh(SPIN_MS / 1000);
+      const totalTicks = 28;
+      for (let i = 0; i < totalTicks; i++) {
+        const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
+        timersRef.current.push(setTimeout(playTick, t));
+      }
+
+      const outcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
+      const slotIndex = WHEEL_ORDER.indexOf(outcome);
+      setRotation(prev => {
+        const prevMod = ((prev % 360) + 360) % 360;
+        const targetMod = slotIndex * SLOT_ANGLE;
+        let delta = targetMod - prevMod;
+        if (delta <= 0) delta += 360;
+        const fullSpins = 5 + Math.floor(Math.random() * 2);
+        return prev + fullSpins * 360 + delta;
+      });
+
+      timersRef.current.push(setTimeout(() => {
+        const won = checkWin(outcome, betType);
+        const payout = won ? bet * getMultiplier(betType) : 0;
+        setResult(outcome);
+        setWinAmount(won ? payout : -bet);
+        if (won) updateBalance(b => b + payout);
+        setSpinning(false);
+        playResultChime(won);
+      }, SPIN_MS));
     }
-
-    const outcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
-    const slotIndex = WHEEL_ORDER.indexOf(outcome);
-    setRotation(prev => {
-      const prevMod = ((prev % 360) + 360) % 360;
-      const targetMod = slotIndex * SLOT_ANGLE;
-      let delta = targetMod - prevMod;
-      if (delta <= 0) delta += 360;
-      const fullSpins = 5 + Math.floor(Math.random() * 2);
-      return prev + fullSpins * 360 + delta;
-    });
-
-    timersRef.current.push(setTimeout(() => {
-      const won = checkWin(outcome, betType);
-      const payout = won ? bet * getMultiplier(betType) : 0;
-      setResult(outcome);
-      setWinAmount(won ? payout : -bet);
-      if (won) updateBalance(b => b + payout);
-      setSpinning(false);
-      playResultChime(won);
-    }, SPIN_MS));
   };
 
   const resultColor = result !== null ? getColor(result) : null;
   const isWin = winAmount !== null && winAmount > 0;
+
+  if (isReal && !deployed) {
+    return (
+      <GameLayout title="ROULETTE" subtitle="Spin the Wheel of Fate" bgImage={bgImage} accentColor="gradient-purple-gold">
+        <div className="glass rounded-2xl border border-purple-500/20 p-6 text-center text-sm text-purple-300/60" data-testid="roulette-not-deployed">
+          Contracts not deployed yet
+        </div>
+      </GameLayout>
+    );
+  }
 
   return (
     <GameLayout title="ROULETTE" subtitle="Spin the Wheel of Fate" bgImage={bgImage} accentColor="gradient-purple-gold">
@@ -208,7 +328,16 @@ export default function Roulette() {
 
         {/* Balance bar */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-purple-500/15">
-          {showBalance ? (
+          {isReal ? (
+            connected ? (
+              <div>
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Wallet Balance</div>
+                <div className="font-cinzel font-bold text-lg text-yellow-300">
+                  {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
+                </div>
+              </div>
+            ) : <div />
+          ) : showBalance ? (
             <div>
               <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Balance</div>
               <div className="font-cinzel font-bold text-lg text-yellow-300">
@@ -399,13 +528,29 @@ export default function Roulette() {
           </AnimatePresence>
 
           {/* Bet amount */}
-          <BetControls value={bet} onChange={setBet} max={balance} disabled={spinning} />
+          {isReal ? (
+            connected && (
+              <>
+                <TokenSelector value={realToken} onChange={setRealToken} />
+                <BetControls
+                  value={realBetAmount}
+                  onChange={setRealBetAmount}
+                  max={Math.max(1, realBalanceHuman)}
+                  disabled={spinning}
+                  step={1}
+                  unitLabel={realToken}
+                />
+              </>
+            )
+          ) : (
+            <BetControls value={bet} onChange={setBet} max={balance} disabled={spinning} />
+          )}
 
-          {/* Real mode: connect wallet / deposit gate */}
-          {gated && <WalletGateNotice reason={gateReason} />}
+          {/* Real mode: connect wallet gate */}
+          {isReal && !connected && <WalletGateNotice reason="wallet" />}
 
           {/* Spin */}
-          {!gated && (
+          {(!isReal || connected) && (
             <motion.button
               whileHover={canSpin ? { scale: 1.03, y: -2 } : {}}
               whileTap={canSpin ? { scale: 0.97 } : {}}
@@ -414,12 +559,26 @@ export default function Roulette() {
               className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.22em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               data-testid="button-spin"
             >
-              {spinning ? "Spinning…" : `Spin — ${betLabel(betType)}`}
+              {spinning
+                ? isReal
+                  ? chainStatus === "approving"
+                    ? "Approving…"
+                    : chainStatus === "committing"
+                    ? "Preparing Bet…"
+                    : chainStatus === "pending"
+                    ? "Placing Bet…"
+                    : "Spinning…"
+                  : "Spinning…"
+                : `Spin — ${betLabel(betType)}`}
             </motion.button>
           )}
 
+          {isReal && chainError && (
+            <p className="text-xs text-red-400/80" data-testid="roulette-chain-error">{chainError}</p>
+          )}
+
           {/* Reset */}
-          {balance <= 0 && !spinning && !gated && (
+          {!isReal && balance <= 0 && !spinning && !gated && (
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

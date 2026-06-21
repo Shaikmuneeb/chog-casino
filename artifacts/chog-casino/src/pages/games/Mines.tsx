@@ -1,9 +1,16 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
+import TokenSelector from "@/components/TokenSelector";
 import WalletGateNotice from "@/components/WalletGateNotice";
 import { useGameBalance } from "@/hooks/useGameBalance";
+import { useGameMode } from "@/context/GameModeContext";
+import { useWallet } from "@/hooks/useWallet";
+import { useMinesOnChain } from "@/hooks/useMinesOnChain";
+import { publicClient } from "@/lib/casinoClient";
+import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811958820.png";
 import diamondImg from "@assets/chog_mines_diamond_1781814946879.png";
 import bombImg from "@assets/chog_mines_2_1781814964561.png";
@@ -101,6 +108,10 @@ function calcMultiplier(safe: number, mines: number): number {
 const MINE_OPTIONS = Array.from({ length: 25 }, (_, i) => i + 1);
 
 export default function Mines() {
+  const { mode } = useGameMode();
+  const isReal = mode === "real";
+  const { address, connected } = useWallet();
+
   const [bet, setBet] = useState(100);
   const [mineCount, setMineCount] = useState(5);
   const [grid, setGrid] = useState<CellState[]>(Array(GRID_SIZE).fill("hidden"));
@@ -110,17 +121,93 @@ export default function Mines() {
   const [safeRevealed, setSafeRevealed] = useState(0);
 
   const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } = useGameBalance();
-  const canStart = !gated && bet > 0 && bet <= balance;
 
-  const start = () => {
+  // Real-mode on-chain state
+  const [realToken, setRealToken] = useState<SupportedToken>("MON");
+  const [realBetAmount, setRealBetAmount] = useState(1);
+  const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
+  const [chainError, setChainError] = useState<string | null>(null);
+  const [realPayout, setRealPayout] = useState<bigint | null>(null);
+  const { status: chainStatus, placeBet: placeBetOnChain } = useMinesOnChain();
+  const deployed = isDeployed(CONTRACTS.mines) && isDeployed(CONTRACTS.treasury);
+
+  // Number of picks the player wants (real mode only)
+  const [picks, setPicks] = useState(5);
+
+  // Real-mode balance loading
+  const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
+
+  const canStart = isReal
+    ? connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman
+    : !gated && bet > 0 && bet <= balance;
+
+  useEffect(() => {
+    if (!isReal || !connected || !address) return;
+    let cancelled = false;
+    async function load() {
+      const info = TOKENS[realToken];
+      const raw =
+        realToken === "MON"
+          ? await publicClient.getBalance({ address: address as `0x${string}` })
+          : ((await publicClient.readContract({
+              address: info.address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [address as `0x${string}`],
+            })) as bigint);
+      if (!cancelled) setRealBalanceRaw(raw);
+    }
+    load();
+    const id = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isReal, connected, address, realToken]);
+
+  // Reset state on mode switch
+  useEffect(() => {
+    setGameState("idle");
+    setChainError(null);
+    setRealPayout(null);
+  }, [isReal]);
+
+  const start = async () => {
     if (!canStart) return;
-    const newGrid = generateGrid(mineCount);
-    updateBalance(b => b - bet); // stake is deducted upfront; cashing out pays it back × multiplier
-    setGrid(newGrid);
-    setRevealed(Array(GRID_SIZE).fill(false));
-    setGameState("playing");
-    setMultiplier(1);
-    setSafeRevealed(0);
+
+    if (isReal) {
+      // Real mode: place on-chain bet with picks and mineCount
+      setChainError(null);
+      setRealPayout(null);
+      try {
+        const outcome = await placeBetOnChain(realToken, String(realBetAmount), picks, mineCount);
+        setRealPayout(outcome.payoutAmount);
+        // Generate a visual grid to show (outcome is determined by contract)
+        const newGrid = generateGrid(mineCount);
+        setGrid(newGrid);
+        setRevealed(Array(GRID_SIZE).fill(true));
+        if (outcome.won) {
+          setGameState("cashed");
+          setMultiplier(Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals)) / realBetAmount);
+          setSafeRevealed(picks);
+        } else {
+          setGameState("dead");
+          setSafeRevealed(0);
+        }
+      } catch (err) {
+        setChainError(err instanceof Error ? err.message : "Bet failed");
+        setGameState("idle");
+      }
+    } else {
+      // Fun mode: client-side
+      const newGrid = generateGrid(mineCount);
+      updateBalance(b => b - bet); // stake is deducted upfront; cashing out pays it back × multiplier
+      setGrid(newGrid);
+      setRevealed(Array(GRID_SIZE).fill(false));
+      setGameState("playing");
+      setMultiplier(1);
+      setSafeRevealed(0);
+    }
   };
 
   const reveal = useCallback(
@@ -153,6 +240,16 @@ export default function Mines() {
 
   const isActive = gameState === "playing";
   const isOver = gameState === "dead" || gameState === "cashed";
+
+  if (isReal && !deployed) {
+    return (
+      <GameLayout title="MINES" subtitle="Navigate to Win" bgImage={bgImage} accentColor="text-neon-purple">
+        <div className="glass rounded-2xl border border-purple-500/20 p-6 text-center text-sm text-purple-300/60" data-testid="mines-not-deployed">
+          Contracts not deployed yet
+        </div>
+      </GameLayout>
+    );
+  }
 
   return (
     <GameLayout
@@ -260,57 +357,105 @@ export default function Mines() {
         <div className="px-4 sm:px-5 pb-5 space-y-3 border-t border-purple-500/10 pt-4">
 
           {/* Balance row */}
-          {showBalance && (
+          {isReal ? (
+            connected ? (
+              <div className="flex items-center justify-between px-1">
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Wallet Balance</div>
+                <div className="font-cinzel font-bold text-lg text-yellow-300">
+                  {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
+                </div>
+              </div>
+            ) : null
+          ) : showBalance ? (
             <div className="flex items-center justify-between px-1">
               <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Balance</div>
               <div className="font-cinzel font-bold text-lg text-yellow-300">
                 {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
               </div>
             </div>
-          )}
+          ) : null}
 
-          {/* Real mode: connect wallet / deposit gate */}
-          {gated && (gameState === "idle" || isOver) && <WalletGateNotice reason={gateReason} />}
+          {/* Real mode: connect wallet gate */}
+          {isReal && !connected && (gameState === "idle" || isOver) && <WalletGateNotice reason="wallet" />}
 
           {/* Bet + Mines row — only when idle or after game */}
           <AnimatePresence>
-            {(gameState === "idle" || isOver) && !gated && (
+            {(gameState === "idle" || isOver) && !gated && !(isReal && !connected) && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 4 }}
                 className="space-y-3"
               >
+                {/* Real mode: token selector */}
+                {isReal && connected && (
+                  <TokenSelector value={realToken} onChange={setRealToken} />
+                )}
+
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
-                    Bet ({currencyLabel})
+                    Bet ({isReal ? realToken : currencyLabel})
                   </label>
-                  <BetControls value={bet} onChange={setBet} max={balance} />
+                  {isReal ? (
+                    connected && (
+                      <BetControls
+                        value={realBetAmount}
+                        onChange={setRealBetAmount}
+                        max={Math.max(1, realBalanceHuman)}
+                        step={1}
+                        unitLabel={realToken}
+                      />
+                    )
+                  ) : (
+                    <BetControls value={bet} onChange={setBet} max={balance} />
+                  )}
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
-                    Mines
-                  </label>
-                  <select
-                    value={mineCount}
-                    onChange={(e) => setMineCount(Number(e.target.value))}
-                    className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white bg-transparent text-sm focus:outline-none focus:border-purple-400/60 transition-colors appearance-none cursor-pointer"
-                    data-testid="select-mine-count"
-                  >
-                    {MINE_OPTIONS.map((n) => (
-                      <option key={n} value={n} className="bg-[#150828]">
-                        {n} {n === 1 ? "mine" : "mines"}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+
+                {/* Picks selector (real mode) or Mines selector (fun mode) */}
+                {isReal ? (
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
+                      Picks (safe tiles to reveal)
+                    </label>
+                    <select
+                      value={picks}
+                      onChange={(e) => setPicks(Number(e.target.value))}
+                      className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white bg-transparent text-sm focus:outline-none focus:border-purple-400/60 transition-colors appearance-none cursor-pointer"
+                      data-testid="select-picks"
+                    >
+                      {Array.from({ length: 25 - mineCount }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n} className="bg-[#150828]">
+                          {n} {n === 1 ? "pick" : "picks"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
+                      Mines
+                    </label>
+                    <select
+                      value={mineCount}
+                      onChange={(e) => setMineCount(Number(e.target.value))}
+                      className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white bg-transparent text-sm focus:outline-none focus:border-purple-400/60 transition-colors appearance-none cursor-pointer"
+                      data-testid="select-mine-count"
+                    >
+                      {MINE_OPTIONS.map((n) => (
+                        <option key={n} value={n} className="bg-[#150828]">
+                          {n} {n === 1 ? "mine" : "mines"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
 
 
           {/* Action buttons */}
-          {(gameState === "idle" || isOver) && gated ? null : gameState === "idle" || isOver ? (
+          {(gameState === "idle" || isOver) && (gated || (isReal && !connected)) ? null : gameState === "idle" || isOver ? (
             <>
               <motion.button
                 whileHover={canStart ? { scale: 1.02, y: -1 } : {}}
@@ -320,9 +465,23 @@ export default function Mines() {
                 className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.2em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                 data-testid="button-start-mines"
               >
-                {balance <= 0 ? `Out of ${currencyLabel}` : "Bet"}
+                {isReal
+                  ? chainStatus === "approving"
+                    ? "Approving…"
+                    : chainStatus === "committing"
+                    ? "Preparing Bet…"
+                    : chainStatus === "pending"
+                    ? "Placing Bet…"
+                    : chainStatus === "awaiting_result"
+                    ? "Awaiting Result…"
+                    : realBalanceHuman <= 0
+                    ? `Out of ${realToken}`
+                    : "Bet"
+                  : balance <= 0
+                  ? `Out of ${currencyLabel}`
+                  : "Bet"}
               </motion.button>
-              {balance <= 0 && (
+              {!isReal && balance <= 0 && (
                 <motion.button
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -345,6 +504,10 @@ export default function Mines() {
             >
               Cash Out {multiplier}×
             </motion.button>
+          )}
+
+          {isReal && chainError && (
+            <p className="text-xs text-red-400/80" data-testid="mines-chain-error">{chainError}</p>
           )}
         </div>
       </div>

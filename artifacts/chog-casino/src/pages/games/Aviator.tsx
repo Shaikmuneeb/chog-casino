@@ -1,9 +1,17 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Volume2, VolumeX } from "lucide-react";
+import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
+import BetControls from "@/components/BetControls";
+import TokenSelector from "@/components/TokenSelector";
 import WalletGateNotice from "@/components/WalletGateNotice";
 import { useGameBalance } from "@/hooks/useGameBalance";
+import { useGameMode } from "@/context/GameModeContext";
+import { useWallet } from "@/hooks/useWallet";
+import { useCrashOnChain } from "@/hooks/useCrashOnChain";
+import { publicClient } from "@/lib/casinoClient";
+import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811777784.png";
 import aviatorBg from "@assets/aviator/aviator-bg.png";
 import aviatorPlane from "@assets/aviator/aviator-plane.png";
@@ -186,6 +194,10 @@ function getMultiplierBg(m: number): string {
 type Phase = "waiting" | "betting" | "flying" | "crashed" | "cashed";
 
 export default function Aviator() {
+  const { mode } = useGameMode();
+  const isReal = mode === "real";
+  const { address, connected } = useWallet();
+
   const [bet, setBet] = useState(1000);
   const {
     balance,
@@ -205,6 +217,53 @@ export default function Aviator() {
   const [resultMsg, setResultMsg] = useState<{ text: string; cls: string } | null>(null);
   const [betPlaced, setBetPlaced] = useState(false);
   const [muted, setMuted] = useState(false);
+
+  // Real-mode on-chain state
+  const [realToken, setRealToken] = useState<SupportedToken>("MON");
+  const [realBetAmount, setRealBetAmount] = useState(1);
+  const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
+  const [chainError, setChainError] = useState<string | null>(null);
+  const [realPayout, setRealPayout] = useState<bigint | null>(null);
+  const { status: chainStatus, placeBet: placeBetOnChain } = useCrashOnChain();
+  const deployed = isDeployed(CONTRACTS.crash) && isDeployed(CONTRACTS.treasury);
+
+  useEffect(() => {
+    if (!isReal || !connected || !address) return;
+    let cancelled = false;
+    async function load() {
+      const info = TOKENS[realToken];
+      const raw =
+        realToken === "MON"
+          ? await publicClient.getBalance({ address: address as `0x${string}` })
+          : ((await publicClient.readContract({
+              address: info.address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [address as `0x${string}`],
+            })) as bigint);
+      if (!cancelled) setRealBalanceRaw(raw);
+    }
+    load();
+    const id = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isReal, connected, address, realToken]);
+
+  const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
+
+  // Reset state on mode switch — autoBet/controlTab too, since real money must never be
+  // placed via the fun-mode auto-bet path (see the isReal guard in startBetting above).
+  useEffect(() => {
+    setPhase("waiting");
+    setChainError(null);
+    setRealPayout(null);
+    setResultMsg(null);
+    setBetPlaced(false);
+    setAutoBet(false);
+    setControlTab("bet");
+  }, [isReal]);
 
   const phaseRef = useRef<Phase>(phase);
   phaseRef.current = phase;
@@ -243,8 +302,9 @@ export default function Aviator() {
   const startBettingRef = useRef<(() => void) | null>(null);
   const startFlyingRef = useRef<((cp: number) => void) | null>(null);
 
-  const canPlaceBet =
-    (phase === "waiting" || phase === "betting") && !gated && bet > 0 && bet <= balance;
+  const canPlaceBet = isReal
+    ? (phase === "waiting" || phase === "betting") && connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman
+    : (phase === "waiting" || phase === "betting") && !gated && bet > 0 && bet <= balance;
 
   const clearTimers = useCallback(() => {
     if (timerRef.current) {
@@ -356,7 +416,9 @@ export default function Aviator() {
         lastSecond = second;
       }, tickMs);
 
-      if (autoBet && !gated && bet > 0 && bet <= balance) {
+      // Auto-bet only exists in Fun mode (the toggle to enable it is hidden in Real mode) —
+      // real money must always go through placeBetOnChain, never the fake local balance update.
+      if (!isReal && autoBet && !gated && bet > 0 && bet <= balance) {
         setTimeout(() => {
           if (!betPlacedRef.current && !gated && bet > 0 && bet <= balance) {
             updateBalance((b) => b - bet);
@@ -373,7 +435,7 @@ export default function Aviator() {
 
       tickRef.current = countdownTick;
     },
-    [clearTimers, autoBet, gated, bet, balance, updateBalance],
+    [clearTimers, isReal, autoBet, gated, bet, balance, updateBalance],
   );
 
   startBettingRef.current = startBetting;
@@ -381,10 +443,34 @@ export default function Aviator() {
   const placeBet = useCallback(() => {
     if (!canPlaceBet || betPlacedRef.current) return;
     audioCtx(); // unlock audio on this user gesture
-    updateBalance((b) => b - bet);
+    if (isReal) {
+      // Real mode: place on-chain bet with auto-cashout
+      setChainError(null);
+      setRealPayout(null);
+      placeBetOnChain(realToken, String(realBetAmount), autoCashOutMult)
+        .then((outcome) => {
+          setRealPayout(outcome.payoutAmount);
+          if (outcome.won) {
+            setResultMsg({
+              text: `Cashed out at ${autoCashOutMult.toFixed(2)}×  +${Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals))} ${realToken}`,
+              cls: "text-green-400",
+            });
+          } else {
+            setResultMsg({
+              text: `CRASHED — Lost ${realBetAmount} ${realToken}`,
+              cls: "text-red-400",
+            });
+          }
+        })
+        .catch((err) => {
+          setChainError(err instanceof Error ? err.message : "Bet failed");
+        });
+    } else {
+      updateBalance((b) => b - bet);
+    }
     betPlacedRef.current = true;
     setBetPlaced(true);
-  }, [canPlaceBet, bet, updateBalance]);
+  }, [canPlaceBet, isReal, placeBetOnChain, realToken, realBetAmount, autoCashOutMult, bet, updateBalance]);
 
   useEffect(() => {
     startBetting();
@@ -399,6 +485,16 @@ export default function Aviator() {
   const planeRotation = -6 - climb * 16;
 
   const setBetAmount = (n: number) => setBet(Math.max(1, Math.min(balance, Math.round(n))));
+
+  if (isReal && !deployed) {
+    return (
+      <GameLayout title="AVIATOR" subtitle="Cash Out Before It Crashes" bgImage={bgImage} accentColor="text-cyan-400">
+        <div className="glass rounded-2xl border border-cyan-500/20 p-6 text-center text-sm text-purple-300/60" data-testid="aviator-not-deployed">
+          Contracts not deployed yet
+        </div>
+      </GameLayout>
+    );
+  }
 
   return (
     <GameLayout
@@ -562,7 +658,17 @@ export default function Aviator() {
 
         {/* Controls */}
         <div className="px-4 sm:px-6 pb-5 pt-4 space-y-3">
-          {showBalance && (
+          {/* Balance row */}
+          {isReal ? (
+            connected ? (
+              <div className="flex items-center justify-between px-1">
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Wallet Balance</div>
+                <div className="font-cinzel font-bold text-lg text-yellow-300">
+                  {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
+                </div>
+              </div>
+            ) : null
+          ) : showBalance ? (
             <div className="flex items-center justify-between px-1">
               <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Balance</div>
               <motion.div
@@ -575,72 +681,94 @@ export default function Aviator() {
                 <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
               </motion.div>
             </div>
-          )}
+          ) : null}
 
-          {gated && <WalletGateNotice reason={gateReason} />}
+          {isReal && !connected && <WalletGateNotice reason="wallet" />}
 
           {/* Bet/Auto controls — visible when not flying */}
-          {phase !== "flying" && !gated && (
+          {phase !== "flying" && !gated && !(isReal && !connected) && (
             <div className="space-y-3">
-              {/* Tab toggle */}
-              <div className="flex rounded-xl glass border border-cyan-500/20 p-1">
-                {(["bet", "auto"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setControlTab(tab)}
-                    className={`flex-1 py-2 rounded-lg text-xs font-cinzel font-bold tracking-[0.15em] uppercase transition-all duration-200 ${
-                      controlTab === tab
-                        ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-200"
-                        : "text-purple-300/50 hover:text-purple-200"
-                    }`}
-                  >
-                    {tab === "bet" ? "Bet" : "Auto"}
-                  </button>
-                ))}
-              </div>
+              {/* Tab toggle (fun mode only) */}
+              {!isReal && (
+                <div className="flex rounded-xl glass border border-cyan-500/20 p-1">
+                  {(["bet", "auto"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setControlTab(tab)}
+                      className={`flex-1 py-2 rounded-lg text-xs font-cinzel font-bold tracking-[0.15em] uppercase transition-all duration-200 ${
+                        controlTab === tab
+                          ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-200"
+                          : "text-purple-300/50 hover:text-purple-200"
+                      }`}
+                    >
+                      {tab === "bet" ? "Bet" : "Auto"}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Real mode: token selector */}
+              {isReal && connected && (
+                <TokenSelector value={realToken} onChange={setRealToken} />
+              )}
 
               {/* Bet amount row */}
-              <div className="flex items-stretch gap-2">
-                <motion.button
-                  whileTap={{ scale: 0.88 }}
-                  onClick={() => setBetAmount(bet - 50)}
-                  disabled={bet <= 50}
-                  className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
-                >
-                  −
-                </motion.button>
-                <div className="flex-1 flex items-center justify-center gap-1.5 glass border border-cyan-500/30 rounded-xl px-3 py-2">
-                  <span className="font-cinzel font-black text-lg text-white tabular-nums truncate">
-                    {bet.toLocaleString()}
-                  </span>
-                  <span className="text-xs text-yellow-400/70 font-medium shrink-0">{currencyLabel}</span>
-                </div>
-                <motion.button
-                  whileTap={{ scale: 0.88 }}
-                  onClick={() => setBetAmount(bet + 50)}
-                  disabled={bet >= balance}
-                  className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
-                >
-                  +
-                </motion.button>
-              </div>
+              {isReal ? (
+                connected && (
+                  <BetControls
+                    value={realBetAmount}
+                    onChange={setRealBetAmount}
+                    max={Math.max(1, realBalanceHuman)}
+                    disabled={phase === "crashed"}
+                    step={1}
+                    unitLabel={realToken}
+                  />
+                )
+              ) : (
+                <>
+                  <div className="flex items-stretch gap-2">
+                    <motion.button
+                      whileTap={{ scale: 0.88 }}
+                      onClick={() => setBetAmount(bet - 50)}
+                      disabled={bet <= 50}
+                      className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
+                    >
+                      −
+                    </motion.button>
+                    <div className="flex-1 flex items-center justify-center gap-1.5 glass border border-cyan-500/30 rounded-xl px-3 py-2">
+                      <span className="font-cinzel font-black text-lg text-white tabular-nums truncate">
+                        {bet.toLocaleString()}
+                      </span>
+                      <span className="text-xs text-yellow-400/70 font-medium shrink-0">{currencyLabel}</span>
+                    </div>
+                    <motion.button
+                      whileTap={{ scale: 0.88 }}
+                      onClick={() => setBetAmount(bet + 50)}
+                      disabled={bet >= balance}
+                      className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
+                    >
+                      +
+                    </motion.button>
+                  </div>
 
-              {/* Quick chips */}
-              <div className="grid grid-cols-4 gap-2">
-                {QUICK_CHIPS.map((chip) => (
-                  <motion.button
-                    key={chip}
-                    whileTap={{ scale: 0.92 }}
-                    onClick={() => setBetAmount(chip)}
-                    className="py-2 rounded-lg glass border border-cyan-500/30 text-cyan-200 text-xs font-cinzel font-bold tracking-wider hover:border-cyan-400/60 hover:bg-cyan-700/20 transition-all select-none"
-                  >
-                    {chip.toLocaleString()}
-                  </motion.button>
-                ))}
-              </div>
+                  {/* Quick chips */}
+                  <div className="grid grid-cols-4 gap-2">
+                    {QUICK_CHIPS.map((chip) => (
+                      <motion.button
+                        key={chip}
+                        whileTap={{ scale: 0.92 }}
+                        onClick={() => setBetAmount(chip)}
+                        className="py-2 rounded-lg glass border border-cyan-500/30 text-cyan-200 text-xs font-cinzel font-bold tracking-wider hover:border-cyan-400/60 hover:bg-cyan-700/20 transition-all select-none"
+                      >
+                        {chip.toLocaleString()}
+                      </motion.button>
+                    ))}
+                  </div>
+                </>
+              )}
 
-              {/* Auto tab extras */}
-              {controlTab === "auto" && (
+              {/* Auto tab extras (fun mode only) */}
+              {!isReal && controlTab === "auto" && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
@@ -711,14 +839,14 @@ export default function Aviator() {
           )}
 
           {/* Action buttons */}
-          {gated ? null : phase === "flying" && betPlaced && cashedOut ? (
+          {gated || (isReal && !connected) ? null : phase === "flying" && betPlaced && cashedOut ? (
             <div
               className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase text-center bg-gradient-to-r from-green-900 to-green-800 text-green-300 border border-green-500/40"
               data-testid="button-cashed-out"
             >
               Cashed Out ✓
             </div>
-          ) : phase === "flying" && betPlaced ? (
+          ) : phase === "flying" && betPlaced && !isReal ? (
             <motion.button
               whileHover={{ scale: 1.03, y: -2 }}
               whileTap={{ scale: 0.97 }}
@@ -736,16 +864,32 @@ export default function Aviator() {
               disabled={!canPlaceBet || betPlaced}
               className={`w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase transition-all ${
                 betPlaced
-                  ? "bg-gradient-to-r from-purple-900 to-purple-800 text-purple-300 border border-purple-500/30"
+                  ? isReal
+                    ? "bg-gradient-to-r from-purple-600 to-purple-800 text-white border border-purple-400/30"
+                    : "bg-gradient-to-r from-purple-900 to-purple-800 text-purple-300 border border-purple-500/30"
                   : "bg-gradient-to-r from-green-600 to-green-800 text-white border border-green-400/30 disabled:opacity-40 disabled:cursor-not-allowed"
               }`}
               data-testid="button-place-bet"
             >
-              {betPlaced ? "Bet Placed" : "Bet"}
+              {betPlaced
+                ? isReal
+                  ? chainStatus === "approving"
+                    ? "Approving…"
+                    : chainStatus === "committing"
+                    ? "Preparing Bet…"
+                    : chainStatus === "pending"
+                    ? "Placing Bet…"
+                    : "Awaiting Result…"
+                  : "Bet Placed"
+                : "Bet"}
             </motion.button>
           ) : null}
 
-          {balance <= 0 && phase !== "flying" && !gated && (
+          {isReal && chainError && (
+            <p className="text-xs text-red-400/80" data-testid="aviator-chain-error">{chainError}</p>
+          )}
+
+          {!isReal && balance <= 0 && phase !== "flying" && !gated && (
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

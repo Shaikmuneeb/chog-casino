@@ -21,8 +21,8 @@ export default function WalletGateNotice({ reason = "wallet" }: { reason?: GateR
           <span className="text-sm font-semibold tracking-wide">Deposit to play</span>
         </div>
         <p className="text-xs text-purple-200/60 max-w-xs">
-          You have no $CHOG balance yet. Deposits aren't live on this build —
-          switch to <span className="text-purple-200 font-medium">Fun</span> mode to play with free credits.
+          Send MON, USDC, or CHOG to your wallet address to start playing with real funds.
+          Click your wallet address above to view your deposit details.
         </p>
       </motion.div>
     );

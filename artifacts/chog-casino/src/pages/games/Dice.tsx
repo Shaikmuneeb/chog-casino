@@ -1,9 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Volume2, VolumeX } from "lucide-react";
+import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
+import BetControls from "@/components/BetControls";
+import TokenSelector from "@/components/TokenSelector";
 import WalletGateNotice from "@/components/WalletGateNotice";
 import { useGameBalance } from "@/hooks/useGameBalance";
+import { useGameMode } from "@/context/GameModeContext";
+import { useWallet } from "@/hooks/useWallet";
+import { useDiceOnChain } from "@/hooks/useDiceOnChain";
+import { publicClient } from "@/lib/casinoClient";
+import { ERC20_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/dice/dice-cover.png";
 import diceBg from "@assets/dice/dice-bg.png";
 
@@ -88,6 +96,10 @@ function playResult(won: boolean) {
 type Direction = "under" | "over";
 
 export default function Dice() {
+  const { mode } = useGameMode();
+  const isReal = mode === "real";
+  const { address, connected } = useWallet();
+
   const [bet, setBet] = useState(1000);
   const { balance, updateBalance, resetBalance, gated, gateReason, showBalance, currencyLabel } =
     useGameBalance();
@@ -113,12 +125,60 @@ export default function Dice() {
   const autoRunningRef = useRef(false);
   const rollTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
+  // Real-mode on-chain state
+  const [realToken, setRealToken] = useState<SupportedToken>("MON");
+  const [realBetAmount, setRealBetAmount] = useState(1);
+  const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
+  const [chainError, setChainError] = useState<string | null>(null);
+  const [realPayout, setRealPayout] = useState<bigint | null>(null);
+  const { status: chainStatus, placeBet: placeBetOnChain } = useDiceOnChain();
+  const deployed = isDeployed(CONTRACTS.dice) && isDeployed(CONTRACTS.treasury);
+
+  useEffect(() => {
+    if (!isReal || !connected || !address) return;
+    let cancelled = false;
+    async function load() {
+      const info = TOKENS[realToken];
+      const raw =
+        realToken === "MON"
+          ? await publicClient.getBalance({ address: address as `0x${string}` })
+          : ((await publicClient.readContract({
+              address: info.address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [address as `0x${string}`],
+            })) as bigint);
+      if (!cancelled) setRealBalanceRaw(raw);
+    }
+    load();
+    const id = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isReal, connected, address, realToken]);
+
+  const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
+
   // Win chance and payout multiplier derived from the target + direction.
   const winChance = direction === "under" ? target : 100 - target;
   const multiplier = winChance > 0 ? HOUSE_MULTIPLIER / winChance : 0;
   const payout = Math.floor(bet * multiplier);
 
-  const canRoll = !rolling && !gated && bet > 0 && bet <= balance && winChance > 0;
+  const canRoll = isReal
+    ? !rolling && connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman && winChance > 0
+    : !rolling && !gated && bet > 0 && bet <= balance && winChance > 0;
+
+  // Reset state on mode switch
+  useEffect(() => {
+    setRolling(false);
+    setChainError(null);
+    setRealPayout(null);
+    setResultMsg(null);
+    setLastRoll(null);
+    setLastWin(null);
+    setHistory([]);
+  }, [isReal]);
 
   const clearRollTimers = () => {
     rollTimersRef.current.forEach(clearTimeout);
@@ -141,8 +201,65 @@ export default function Dice() {
 
   const setBetAmount = (n: number) => setBet(Math.max(1, Math.min(balance, Math.round(n))));
 
-  // Runs one roll; resolves with whether it won so the auto loop can chain.
-  const doRoll = useCallback(
+  // Real-mode: on-chain roll
+  const rollReal = useCallback(async () => {
+    if (!canRoll) return;
+    audioCtx();
+    setRolling(true);
+    setChainError(null);
+    setResultMsg(null);
+    setLastRoll(null);
+    setLastWin(null);
+
+    // Flicker animation while waiting for chain
+    let ticks = 0;
+    const flickerEvery = 60;
+    const interval = setInterval(() => {
+      setDisplayRoll(rollDice());
+      if (ticks % 2 === 0) playRollTick();
+      ticks++;
+    }, flickerEvery);
+    rollTimersRef.current.push(interval as unknown as ReturnType<typeof setTimeout>);
+
+    try {
+      const outcome = await placeBetOnChain(realToken, String(realBetAmount), target, direction === "under");
+      clearInterval(interval);
+      // The contract resolves the roll — we don't know the exact number, but we know won/lost
+      const won = outcome.won;
+      // For display: show a random roll that matches the outcome direction
+      const result = won
+        ? (direction === "under" ? Math.random() * (target - 1) + 0.01 : Math.random() * (100 - target) + target + 0.01)
+        : (direction === "under" ? Math.random() * (100 - target) + target : Math.random() * target);
+      const roundedResult = Math.round(result * 100) / 100;
+      setDisplayRoll(roundedResult);
+      setLastRoll(roundedResult);
+      setLastWin(won);
+      setRealPayout(outcome.payoutAmount);
+      setHistory((prev) => [{ roll: roundedResult, win: won }, ...prev].slice(0, MAX_HISTORY));
+      const id = ++rollIdRef.current;
+      if (won) {
+        setResultMsg({
+          text: `Rolled ${roundedResult.toFixed(2)} — WIN +${Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals))} ${realToken}`,
+          cls: "text-green-400",
+          id,
+        });
+      } else {
+        setResultMsg({
+          text: `Rolled ${roundedResult.toFixed(2)} — Lost ${realBetAmount} ${realToken}`,
+          cls: "text-red-400",
+          id,
+        });
+      }
+      playResult(won);
+    } catch (err) {
+      clearInterval(interval);
+      setChainError(err instanceof Error ? err.message : "Bet failed");
+    }
+    setRolling(false);
+  }, [canRoll, placeBetOnChain, realToken, realBetAmount, target, direction]);
+
+  // Fun-mode: client-side roll
+  const doRollFun = useCallback(
     (onDone?: (won: boolean) => void) => {
       audioCtx(); // unlock audio on the user gesture
       setRolling(true);
@@ -192,8 +309,10 @@ export default function Dice() {
     [bet, direction, target, payout, updateBalance, currencyLabel],
   );
 
+  const doRoll = isReal ? () => { rollReal(); } : doRollFun;
+
   const startAuto = useCallback(() => {
-    if (autoRunningRef.current) return;
+    if (autoRunningRef.current || isReal) return;
     let remaining = autoRolls;
     autoRunningRef.current = true;
     setAutoRunning(true);
@@ -212,13 +331,13 @@ export default function Dice() {
         return;
       }
       remaining--;
-      doRoll(() => {
+      doRollFun(() => {
         const t = setTimeout(runOne, 600);
         rollTimersRef.current.push(t);
       });
     };
     runOne();
-  }, [autoRolls, bet, balance, doRoll]);
+  }, [autoRolls, bet, balance, doRollFun, isReal]);
 
   const stopAuto = () => {
     autoRunningRef.current = false;
@@ -260,6 +379,16 @@ export default function Dice() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+
+  if (isReal && !deployed) {
+    return (
+      <GameLayout title="DICE" subtitle="Roll to Win" bgImage={bgImage} accentColor="text-cyan-400">
+        <div className="glass rounded-2xl border border-cyan-500/20 p-6 text-center text-sm text-purple-300/60" data-testid="dice-not-deployed">
+          Contracts not deployed yet
+        </div>
+      </GameLayout>
+    );
+  }
 
   return (
     <GameLayout title="DICE" subtitle="Roll to Win" bgImage={bgImage} accentColor="text-cyan-400">
@@ -454,7 +583,17 @@ export default function Dice() {
 
         {/* Controls */}
         <div className="px-4 sm:px-6 pb-5 pt-4 space-y-3">
-          {showBalance && (
+          {/* Balance row */}
+          {isReal ? (
+            connected ? (
+              <div className="flex items-center justify-between px-1">
+                <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Wallet Balance</div>
+                <div className="font-cinzel font-bold text-lg text-yellow-300">
+                  {realBalanceHuman.toLocaleString()} <span className="text-xs text-yellow-400/60">{realToken}</span>
+                </div>
+              </div>
+            ) : null
+          ) : showBalance ? (
             <div className="flex items-center justify-between px-1">
               <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">Balance</div>
               <motion.div
@@ -466,11 +605,11 @@ export default function Dice() {
                 {balance.toLocaleString()} <span className="text-xs text-yellow-400/60">{currencyLabel}</span>
               </motion.div>
             </div>
-          )}
+          ) : null}
 
-          {gated && <WalletGateNotice reason={gateReason} />}
+          {isReal && !connected && <WalletGateNotice reason="wallet" />}
 
-          {!gated && (
+          {!gated && !(isReal && !connected) && (
             <div className="space-y-3">
               {/* Roll-under / Roll-over toggle */}
               <div className="flex rounded-xl glass border border-cyan-500/20 p-1">
@@ -491,147 +630,183 @@ export default function Dice() {
                 ))}
               </div>
 
-              {/* Bet/Auto tab toggle — same as Aviator */}
-              <div className="flex rounded-xl glass border border-cyan-500/20 p-1">
-                {(["bet", "auto"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setControlTab(tab)}
-                    className={`flex-1 py-2 rounded-lg text-xs font-cinzel font-bold tracking-[0.15em] uppercase transition-all duration-200 ${
-                      controlTab === tab
-                        ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-200"
-                        : "text-purple-300/50 hover:text-purple-200"
-                    }`}
-                  >
-                    {tab === "bet" ? "Bet" : "Auto"}
-                  </button>
-                ))}
-              </div>
+              {/* Real mode: token selector */}
+              {isReal && connected && (
+                <TokenSelector value={realToken} onChange={setRealToken} />
+              )}
 
-              {/* Bet amount row — same as Aviator */}
-              <div className="flex items-stretch gap-2">
-                <motion.button
-                  whileTap={{ scale: 0.88 }}
-                  onClick={() => setBetAmount(bet - 50)}
-                  disabled={bet <= 50}
-                  className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
-                >
-                  −
-                </motion.button>
-                <div className="flex-1 flex items-center justify-center gap-1.5 glass border border-cyan-500/30 rounded-xl px-3 py-2">
-                  <span className="font-cinzel font-black text-lg text-white tabular-nums truncate">
-                    {bet.toLocaleString()}
-                  </span>
-                  <span className="text-xs text-yellow-400/70 font-medium shrink-0">{currencyLabel}</span>
-                </div>
-                <motion.button
-                  whileTap={{ scale: 0.88 }}
-                  onClick={() => setBetAmount(bet + 50)}
-                  disabled={bet >= balance}
-                  className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
-                >
-                  +
-                </motion.button>
-              </div>
-
-              {/* Quick chips — same as Aviator */}
-              <div className="grid grid-cols-4 gap-2">
-                {QUICK_CHIPS.map((chip) => (
-                  <motion.button
-                    key={chip}
-                    whileTap={{ scale: 0.92 }}
-                    onClick={() => setBetAmount(chip)}
-                    className="py-2 rounded-lg glass border border-cyan-500/30 text-cyan-200 text-xs font-cinzel font-bold tracking-wider hover:border-cyan-400/60 hover:bg-cyan-700/20 transition-all select-none"
-                  >
-                    {chip.toLocaleString()}
-                  </motion.button>
-                ))}
-              </div>
-
-              {/* Auto tab extras — same pattern as Aviator */}
-              {controlTab === "auto" && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="space-y-2.5 overflow-hidden"
-                >
-                  {/* Auto bet toggle */}
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-xs text-purple-300/60 font-medium tracking-wide">Auto bet</span>
+              {/* Bet/Auto tab toggle — same as Aviator (fun mode only) */}
+              {!isReal && (
+                <div className="flex rounded-xl glass border border-cyan-500/20 p-1">
+                  {(["bet", "auto"] as const).map((tab) => (
                     <button
-                      onClick={() => setAutoBet((v) => !v)}
-                      className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
-                        autoBet ? "bg-green-600" : "bg-purple-800 border border-purple-600/40"
+                      key={tab}
+                      onClick={() => setControlTab(tab)}
+                      className={`flex-1 py-2 rounded-lg text-xs font-cinzel font-bold tracking-[0.15em] uppercase transition-all duration-200 ${
+                        controlTab === tab
+                          ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-200"
+                          : "text-purple-300/50 hover:text-purple-200"
                       }`}
                     >
-                      <motion.div
-                        className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow"
-                        animate={{ left: autoBet ? 22 : 2 }}
-                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                      />
+                      {tab === "bet" ? "Bet" : "Auto"}
                     </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Bet amount row */}
+              {isReal ? (
+                connected && (
+                  <BetControls
+                    value={realBetAmount}
+                    onChange={setRealBetAmount}
+                    max={Math.max(1, realBalanceHuman)}
+                    disabled={rolling}
+                    step={1}
+                    unitLabel={realToken}
+                  />
+                )
+              ) : (
+                <>
+                  <div className="flex items-stretch gap-2">
+                    <motion.button
+                      whileTap={{ scale: 0.88 }}
+                      onClick={() => setBetAmount(bet - 50)}
+                      disabled={bet <= 50}
+                      className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
+                    >
+                      −
+                    </motion.button>
+                    <div className="flex-1 flex items-center justify-center gap-1.5 glass border border-cyan-500/30 rounded-xl px-3 py-2">
+                      <span className="font-cinzel font-black text-lg text-white tabular-nums truncate">
+                        {bet.toLocaleString()}
+                      </span>
+                      <span className="text-xs text-yellow-400/70 font-medium shrink-0">{currencyLabel}</span>
+                    </div>
+                    <motion.button
+                      whileTap={{ scale: 0.88 }}
+                      onClick={() => setBetAmount(bet + 50)}
+                      disabled={bet >= balance}
+                      className="flex items-center justify-center w-10 h-10 rounded-lg glass border border-cyan-500/30 text-cyan-200 hover:border-cyan-400/60 hover:bg-cyan-700/20 text-lg font-bold disabled:opacity-40 disabled:cursor-not-allowed select-none"
+                    >
+                      +
+                    </motion.button>
                   </div>
 
-                  {/* Number of rolls */}
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-xs text-purple-300/60 font-medium tracking-wide">
-                      Number of rolls
-                    </span>
-                    <div className="flex items-center gap-1 glass border border-cyan-500/30 rounded-lg px-2 py-1">
-                      <input
-                        type="number"
-                        value={autoRollsInput}
-                        onChange={(e) => {
-                          setAutoRollsInput(e.target.value);
-                          const v = parseInt(e.target.value, 10);
-                          if (!isNaN(v) && v >= 1) setAutoRolls(v);
-                        }}
-                        onBlur={() => {
-                          let v = parseInt(autoRollsInput, 10);
-                          if (isNaN(v) || v < 1) v = 1;
-                          if (v > 999) v = 999;
-                          setAutoRolls(v);
-                          setAutoRollsInput(String(v));
-                        }}
-                        min={1}
-                        max={999}
-                        disabled={autoRunning}
-                        className="w-12 bg-transparent text-white text-xs font-cinzel font-bold text-center outline-none tabular-nums"
-                      />
-                    </div>
+                  {/* Quick chips — same as Aviator */}
+                  <div className="grid grid-cols-4 gap-2">
+                    {QUICK_CHIPS.map((chip) => (
+                      <motion.button
+                        key={chip}
+                        whileTap={{ scale: 0.92 }}
+                        onClick={() => setBetAmount(chip)}
+                        className="py-2 rounded-lg glass border border-cyan-500/30 text-cyan-200 text-xs font-cinzel font-bold tracking-wider hover:border-cyan-400/60 hover:bg-cyan-700/20 transition-all select-none"
+                      >
+                        {chip.toLocaleString()}
+                      </motion.button>
+                    ))}
                   </div>
-                </motion.div>
+
+                  {/* Auto tab extras — same pattern as Aviator */}
+                  {controlTab === "auto" && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="space-y-2.5 overflow-hidden"
+                    >
+                      {/* Auto bet toggle */}
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-xs text-purple-300/60 font-medium tracking-wide">Auto bet</span>
+                        <button
+                          onClick={() => setAutoBet((v) => !v)}
+                          className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
+                            autoBet ? "bg-green-600" : "bg-purple-800 border border-purple-600/40"
+                          }`}
+                        >
+                          <motion.div
+                            className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow"
+                            animate={{ left: autoBet ? 22 : 2 }}
+                            transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                          />
+                        </button>
+                      </div>
+
+                      {/* Number of rolls */}
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-xs text-purple-300/60 font-medium tracking-wide">
+                          Number of rolls
+                        </span>
+                        <div className="flex items-center gap-1 glass border border-cyan-500/30 rounded-lg px-2 py-1">
+                          <input
+                            type="number"
+                            value={autoRollsInput}
+                            onChange={(e) => {
+                              setAutoRollsInput(e.target.value);
+                              const v = parseInt(e.target.value, 10);
+                              if (!isNaN(v) && v >= 1) setAutoRolls(v);
+                            }}
+                            onBlur={() => {
+                              let v = parseInt(autoRollsInput, 10);
+                              if (isNaN(v) || v < 1) v = 1;
+                              if (v > 999) v = 999;
+                              setAutoRolls(v);
+                              setAutoRollsInput(String(v));
+                            }}
+                            min={1}
+                            max={999}
+                            disabled={autoRunning}
+                            className="w-12 bg-transparent text-white text-xs font-cinzel font-bold text-center outline-none tabular-nums"
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </>
               )}
             </div>
           )}
 
           {/* Primary action button */}
-          {!gated && (
+          {(!isReal || connected) && (
             <motion.button
               whileHover={canRoll || autoRunning ? { scale: 1.03, y: -2 } : {}}
               whileTap={canRoll || autoRunning ? { scale: 0.97 } : {}}
               onClick={handlePrimary}
               disabled={!autoRunning && !canRoll}
               className={`w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase transition-all ${
-                autoRunning
+                rolling && isReal
+                  ? "bg-gradient-to-r from-purple-600 to-purple-800 text-white border border-purple-400/30"
+                  : autoRunning
                   ? "bg-gradient-to-r from-red-600 to-red-800 text-white border border-red-400/30"
                   : "bg-gradient-to-r from-green-600 to-green-800 text-white border border-green-400/30 disabled:opacity-40 disabled:cursor-not-allowed"
               }`}
               data-testid="button-roll-dice"
             >
-              {autoRunning
+              {rolling && isReal
+                ? chainStatus === "approving"
+                  ? "Approving…"
+                  : chainStatus === "committing"
+                  ? "Preparing Bet…"
+                  : chainStatus === "pending"
+                  ? "Placing Bet…"
+                  : "Awaiting Result…"
+                : autoRunning
                 ? "Stop Auto"
                 : rolling
                 ? "Rolling…"
-                : controlTab === "auto" && autoBet
+                : !isReal && controlTab === "auto" && autoBet
                 ? `Start Auto (${autoRolls})`
                 : "Bet"}
             </motion.button>
           )}
 
-          {balance <= 0 && !rolling && !autoRunning && !gated && (
+          {isReal && chainError && (
+            <p className="text-xs text-red-400/80" data-testid="dice-chain-error">{chainError}</p>
+          )}
+
+          {!isReal && balance <= 0 && !rolling && !autoRunning && !gated && (
             <motion.button
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
