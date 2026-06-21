@@ -1,13 +1,15 @@
 import express from "express";
 import { randomBytes } from "node:crypto";
-import { keccak256, toHex, type Hex } from "viem";
+import { isAddress, keccak256, toHex, type Address, type Hex } from "viem";
 import { SeedStore } from "./store.js";
 import { config, type GameName } from "./config.js";
 import { getLiveCards } from "./blackjackWatcher.js";
+import { DepositStore } from "./depositStore.js";
+import { getOrCreateDepositAddress } from "./depositWatcher.js";
 
 const GAME_NAMES: (GameName | "blackjack")[] = [...Object.keys(config.games), "blackjack"] as (GameName | "blackjack")[];
 
-export function startServer(store: SeedStore) {
+export function startServer(store: SeedStore, depositStore: DepositStore) {
   const app = express();
   app.use(express.json());
 
@@ -52,6 +54,23 @@ export function startServer(store: SeedStore) {
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : "internal error" });
     }
+  });
+
+  /**
+   * Returns (creating on first call) the permanent custodial deposit address for `owner`
+   * (the player's connected wallet address). Send MON/USDC/CHOG to this address from anywhere
+   * — the deposit watcher sweeps it into CustodialVault and credits owner's balance there.
+   */
+  app.post("/deposit-address", (req, res) => {
+    if (!config.depositMnemonic) {
+      return res.status(503).json({ error: "Custodial deposits are not configured on this operator" });
+    }
+    const owner = req.body?.owner as string | undefined;
+    if (!owner || !isAddress(owner)) {
+      return res.status(400).json({ error: "owner must be a valid address" });
+    }
+    const depositAddress = getOrCreateDepositAddress(depositStore, owner as Address);
+    res.json({ depositAddress });
   });
 
   app.get("/health", (_req, res) => res.json({ ok: true }));

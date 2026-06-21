@@ -70,7 +70,30 @@ $5/mo VPS is plenty to start), not on your own laptop that goes to sleep.
   don't let players place new bets.
 - **CORS is wide open** (`*`) in `server.ts` — restrict it to your real frontend origin before
   going live.
-- **The frontend isn't actually calling `/commit` yet.** `BetFlow.tsx` in
-  `../artifacts/chog-casino/src/components` currently sends a hardcoded fake
-  `serverSeedCommitment` (`0x00...00`). It needs to call `POST /commit` first and use the real
-  returned values — this service alone doesn't make betting work end-to-end without that change.
+
+## Custodial deposit addresses (optional)
+
+Gives each player a permanent on-chain address (derived from `DEPOSIT_MNEMONIC`) to deposit
+MON/USDC/CHOG into from anywhere — even a wallet or exchange they've never connected to the
+site. Funds are swept into `CustodialVault` and credited to the player's in-game balance there.
+Leave the vars below in `.env.example` blank to disable this entirely; everything above (the
+commit-reveal betting flow) works independently of it.
+
+- **`DEPOSIT_MNEMONIC`** — the single most sensitive secret in this whole system. It can derive
+  *every* player's deposit address, not just one. Generate with `cast wallet new-mnemonic`,
+  store it more carefully than `OPERATOR_PRIVATE_KEY` (ideally on a separate machine), and never
+  commit it. Rotating it changes every player's deposit address.
+- **`VAULT_OPERATOR_PRIVATE_KEY`** — a separate dedicated wallet (NOT `OPERATOR_PRIVATE_KEY`)
+  holding `OPERATOR_ROLE` on `CustodialVault` (see `contracts/script/DeployCustodialVault.s.sol`).
+  Key separation matters here: a leak of the betting-resolution key must not also grant
+  custodial-credit privileges, and vice versa. This wallet also funds small MON gas top-ups so
+  deposit addresses can sweep out ERC20 (USDC/CHOG) balances — keep it stocked with MON, but it
+  should never hold more than gas money.
+- **Funds sit briefly at the derived address** between deposit and sweep (one poll interval,
+  `DEPOSIT_POLL_INTERVAL_MS`, default 20s) — the watcher sweeps immediately on detecting a
+  balance, but this is not instantaneous. A compromised `DEPOSIT_MNEMONIC` could in principle
+  drain whatever's sitting at an address in that window; it cannot touch anything already
+  credited in `CustodialVault`, since withdrawal there is player-signed, not operator-signed.
+- **`data/deposit-addresses.json`** — same durability requirement as `data/seeds.json`: it's the
+  only record of which address belongs to which player, and of in-flight sweeps that moved funds
+  but haven't been credited yet. Back it up.

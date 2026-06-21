@@ -29,6 +29,9 @@ export const CONTRACTS = {
   mines: "0xa5Ac542aF5d8381a2Ee174a87D8874De2693C819" as `0x${string}`,
   crash: "0x83B779059B82f149F86e96B04c9700bb15b45a63" as `0x${string}`,
   blackjack: "0x4e05B532c7bf3250979265cB096A39E1A344d3da" as `0x${string}`,
+  // Not deployed yet — run contracts/script/DeployCustodialVault.s.sol, then paste the address
+  // here. Every custodial-deposit UI element checks isDeployed(CONTRACTS.custodialVault) first.
+  custodialVault: "0x0000000000000000000000000000000000000000" as `0x${string}`,
 };
 
 export function isDeployed(address: `0x${string}`): boolean {
@@ -68,6 +71,42 @@ export const ERC20_ABI = [
 export const TREASURY_ABI = [
   { type: "function", name: "getBalance", stateMutability: "view", inputs: [{ name: "token", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "maxBet", stateMutability: "view", inputs: [{ name: "token", type: "address" }], outputs: [{ type: "uint256" }] },
+] as const;
+
+// CustodialVault — the per-player deposit-address balance, separate from the Treasury bankroll
+// above. Withdraw is player-signed directly against this contract (see operator/README.md and
+// contracts/src/CustodialVault.sol for the full security rationale).
+export const CUSTODIAL_VAULT_ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [
+      { name: "", type: "address" },
+      { name: "", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "Credited",
+    inputs: [
+      { name: "player", type: "address", indexed: true },
+      { name: "token", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "sweepRef", type: "bytes32", indexed: true },
+    ],
+  },
 ] as const;
 
 // CoinFlip/Dice/Roulette/Mines/Crash all share this placeBet shape in commit-reveal mode

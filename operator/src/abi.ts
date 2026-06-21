@@ -120,3 +120,38 @@ export const BLACKJACK_ABI = [
 ] as const;
 
 export const ActionType = { Hit: 0, Stand: 1, Double: 2, Split: 3 } as const;
+
+export const ERC20_ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+] as const;
+
+export const CUSTODIAL_VAULT_ABI = [
+  {
+    type: "function",
+    name: "credit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "player", type: "address" },
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "sweepRef", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+] as const;
