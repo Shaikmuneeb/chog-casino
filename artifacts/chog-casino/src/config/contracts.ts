@@ -28,9 +28,7 @@ export const CONTRACTS = {
   roulette: "0x4b90Bc0E486983C85F29d56C289ce90759510Eab" as `0x${string}`,
   mines: "0xa5Ac542aF5d8381a2Ee174a87D8874De2693C819" as `0x${string}`,
   crash: "0x83B779059B82f149F86e96B04c9700bb15b45a63" as `0x${string}`,
-  // Fill in after running `forge script script/DeployBlackjack.s.sol:DeployBlackjack --broadcast`
-  // (see contracts/script/DeployBlackjack.s.sol) — deploys against the SAME treasury above.
-  blackjack: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+  blackjack: "0x4e05B532c7bf3250979265cB096A39E1A344d3da" as `0x${string}`,
 };
 
 export function isDeployed(address: `0x${string}`): boolean {
