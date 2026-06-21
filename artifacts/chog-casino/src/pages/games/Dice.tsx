@@ -238,6 +238,29 @@ export default function Dice() {
   const winLeft = direction === "under" ? 0 : target;
   const winWidth = direction === "under" ? target : 100 - target;
 
+  // Drag the handle anywhere along the track to set the target (replaces the range input).
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  const setTargetFromClientX = (clientX: number) => {
+    const el = trackRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const pct = ((clientX - rect.left) / rect.width) * 100;
+    setTarget(Math.max(2, Math.min(98, Math.round(pct))));
+  };
+
+  const handleTrackPointerDown = (e: React.PointerEvent) => {
+    if (rolling || autoRunning) return;
+    setTargetFromClientX(e.clientX);
+    const move = (ev: PointerEvent) => setTargetFromClientX(ev.clientX);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   return (
     <GameLayout title="DICE" subtitle="Roll to Win" bgImage={bgImage} accentColor="text-cyan-400">
       <div className="glass rounded-2xl border border-cyan-500/20 overflow-hidden">
@@ -319,32 +342,75 @@ export default function Dice() {
               </p>
             </div>
 
-            {/* Slider with winning zone */}
-            <div className="max-w-lg mx-auto px-1">
-              <div className="relative h-3 rounded-full bg-purple-950/70 border border-purple-700/40 overflow-hidden">
-                <div
-                  className="absolute top-0 bottom-0 bg-green-500/40"
-                  style={{ left: `${winLeft}%`, width: `${winWidth}%` }}
-                />
-                <div
-                  className="absolute top-0 bottom-0 w-0.5 bg-yellow-300"
-                  style={{ left: `${target}%` }}
-                />
+            {/* Target slider — drag the handle to set your target; the ball lands on each roll */}
+            <div className="max-w-lg mx-auto px-2 pt-10 pb-2">
+              {/* Scale labels */}
+              <div className="flex justify-between text-[11px] font-bold text-purple-200/70 tabular-nums mb-2 px-0.5">
+                {[0, 25, 50, 75, 100].map((n) => (
+                  <span key={n}>{n}</span>
+                ))}
               </div>
-              <input
-                type="range"
-                min={2}
-                max={98}
-                value={target}
-                disabled={rolling || autoRunning}
-                onChange={(e) => setTarget(Number(e.target.value))}
-                className="w-full mt-2 accent-cyan-400 cursor-pointer disabled:cursor-not-allowed"
-                data-testid="dice-target-slider"
-              />
-              <div className="flex justify-between text-[10px] text-purple-300/40 tabular-nums">
-                <span>0</span>
-                <span>50</span>
-                <span>100</span>
+
+              <div
+                ref={trackRef}
+                onPointerDown={handleTrackPointerDown}
+                className={`relative h-3 rounded-full bg-purple-950/70 border border-purple-700/40 ${
+                  rolling || autoRunning ? "" : "cursor-pointer"
+                }`}
+                data-testid="dice-track"
+              >
+                {/* Losing (red) / winning (green) zones */}
+                <div className="absolute inset-0 rounded-full overflow-hidden">
+                  <div className="absolute inset-0 bg-red-500/60" />
+                  <div
+                    className="absolute top-0 bottom-0 bg-green-500/70"
+                    style={{ left: `${winLeft}%`, width: `${winWidth}%` }}
+                  />
+                </div>
+
+                {/* Result ball — travels to where the dice landed on each bet */}
+                {(rolling || lastRoll !== null) && (
+                  <motion.div
+                    className="absolute z-30 pointer-events-none"
+                    style={{ top: "50%" }}
+                    animate={{ left: `${displayRoll}%` }}
+                    transition={
+                      rolling
+                        ? { duration: 0.06, ease: "linear" }
+                        : { type: "spring", stiffness: 260, damping: 18 }
+                    }
+                  >
+                    <div className="relative -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+                      <span
+                        className={`absolute -top-7 font-cinzel font-bold text-xs tabular-nums whitespace-nowrap ${
+                          rolling ? "text-cyan-300" : lastWin ? "text-green-300" : "text-red-300"
+                        }`}
+                      >
+                        {displayRoll.toFixed(2)}
+                      </span>
+                      <div
+                        className={`w-4 h-4 rounded-full border-2 border-white shadow-[0_0_12px_rgba(255,255,255,0.6)] ${
+                          rolling ? "bg-cyan-400" : lastWin ? "bg-green-400" : "bg-red-400"
+                        }`}
+                      />
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Draggable target handle */}
+                <div
+                  className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20 w-6 h-8 rounded-md bg-gradient-to-b from-cyan-300 to-cyan-500 border border-cyan-100 shadow-lg flex items-center justify-center ${
+                    rolling || autoRunning ? "opacity-60" : "cursor-grab active:cursor-grabbing"
+                  }`}
+                  style={{ left: `${target}%` }}
+                  data-testid="dice-target-handle"
+                >
+                  <div className="flex gap-[2px]">
+                    <span className="w-[2px] h-3.5 rounded-full bg-cyan-900/70" />
+                    <span className="w-[2px] h-3.5 rounded-full bg-cyan-900/70" />
+                    <span className="w-[2px] h-3.5 rounded-full bg-cyan-900/70" />
+                  </div>
+                </div>
               </div>
             </div>
 
