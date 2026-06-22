@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex } from "viem";
+import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex, type TransactionReceipt } from "viem";
 import { publicClient, walletClient, vaultWalletClient, operatorAccount } from "./chain.js";
 import { COINFLIP_ABI, DICE_ABI, ROULETTE_ABI, MINES_ABI, CRASH_ABI, BLACKJACK_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
@@ -52,7 +52,20 @@ async function ensureOperatorAllowance(token: Address, amount: bigint) {
       functionName: "approve",
       args: [config.treasury, 2n ** 256n - 1n],
     });
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    assertTxSucceeded(receipt, `[allowance] operator approve for ${token}`);
+  }
+}
+
+/** Every writeContract call here is preflight-simulated by viem, but the chain's actual state
+ *  at inclusion time can differ from simulation time (a front-run, a solvency check that passed
+ *  moments before and fails by the time it lands, etc.) — a mined-but-reverted transaction still
+ *  produces a receipt, just with no event logs and status "reverted". Treating that the same as
+ *  success (e.g. trying to decode a BetPlaced event that was never emitted) produces confusing,
+ *  wrong error messages instead of the real one. */
+function assertTxSucceeded(receipt: TransactionReceipt, context: string) {
+  if (receipt.status !== "success") {
+    throw new VaultBetError(`${context} reverted on-chain (tx ${receipt.transactionHash})`, 500);
   }
 }
 
@@ -120,6 +133,7 @@ async function placeSingleShotVaultBet(
     value: token === NATIVE_TOKEN ? amount : 0n,
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[${game}] placeBet for ${owner}`);
 
   const [placedLog] = parseEventLogs({ abi, eventName: "BetPlaced", logs: receipt.logs }) as Array<{
     args: { betRef?: bigint };
@@ -238,6 +252,7 @@ export async function placeBlackjackBet(
     value: token === NATIVE_TOKEN ? amount : 0n,
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[blackjack] placeBet for ${owner}`);
 
   const [openedLog] = parseEventLogs({ abi: BLACKJACK_ABI, eventName: "RoundOpened", logs: receipt.logs }) as Array<{
     args: { roundId?: bigint };
@@ -262,7 +277,8 @@ export async function blackjackHit(store: SeedStore, owner: Address, roundId: st
     functionName: "hit",
     args: [BigInt(roundId), handIndex],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[blackjack] hit on round ${roundId} for ${owner}`);
 }
 
 export async function blackjackStand(store: SeedStore, owner: Address, roundId: string, handIndex: number) {
@@ -273,7 +289,8 @@ export async function blackjackStand(store: SeedStore, owner: Address, roundId: 
     functionName: "stand",
     args: [BigInt(roundId), handIndex],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[blackjack] stand on round ${roundId} for ${owner}`);
 }
 
 /**
@@ -298,7 +315,8 @@ export async function blackjackDouble(store: SeedStore, owner: Address, roundId:
     args: [BigInt(roundId), handIndex],
     value: token === NATIVE_TOKEN ? extraAmount : 0n,
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[blackjack] double on round ${roundId} hand ${handIndex} for ${owner}`);
 
   const debitRef = keccak256(toHex(`${record.commitment}-double-${handIndex}`));
   await debitVault(owner, token as Address, extraAmount, debitRef, `[blackjack] round ${roundId} double on hand ${handIndex} for ${owner}`);
@@ -320,7 +338,8 @@ export async function blackjackSplit(store: SeedStore, owner: Address, roundId: 
     args: [BigInt(roundId)],
     value: token === NATIVE_TOKEN ? betHand0 : 0n,
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[blackjack] split on round ${roundId} for ${owner}`);
 
   const debitRef = keccak256(toHex(`${record.commitment}-split`));
   await debitVault(owner, token as Address, betHand0, debitRef, `[blackjack] round ${roundId} split for ${owner}`);
