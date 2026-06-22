@@ -2,14 +2,16 @@ import { useEffect, useState } from "react";
 import { formatUnits } from "viem";
 import { useWallet } from "@/hooks/useWallet";
 import { publicClient } from "@/lib/casinoClient";
-import { ERC20_ABI, TOKENS, type SupportedToken } from "@/config/contracts";
+import { CONTRACTS, CUSTODIAL_VAULT_ABI, TOKENS, type SupportedToken } from "@/config/contracts";
 
 interface TokenSelectorProps {
   value: SupportedToken;
   onChange: (token: SupportedToken) => void;
 }
 
-/// [MON] [USDC] [CHOG] toggle with each button showing the connected wallet's live balance.
+/// [MON] [USDC] [CHOG] toggle with each button showing the player's in-game (CustodialVault)
+/// balance — every game now bets from that deposited balance, not the connected wallet's own
+/// on-chain balance, so showing the wallet's balance here would be misleading.
 export default function TokenSelector({ value, onChange }: TokenSelectorProps) {
   const { address, connected } = useWallet();
   const [balances, setBalances] = useState<Partial<Record<SupportedToken, bigint>>>({});
@@ -21,18 +23,14 @@ export default function TokenSelector({ value, onChange }: TokenSelectorProps) {
     async function loadBalances() {
       const symbols = Object.keys(TOKENS) as SupportedToken[];
       const results = await Promise.all(
-        symbols.map(async (symbol) => {
-          const token = TOKENS[symbol];
-          if (symbol === "MON") {
-            return publicClient.getBalance({ address: address as `0x${string}` });
-          }
-          return publicClient.readContract({
-            address: token.address,
-            abi: ERC20_ABI,
+        symbols.map((symbol) =>
+          publicClient.readContract({
+            address: CONTRACTS.custodialVault,
+            abi: CUSTODIAL_VAULT_ABI,
             functionName: "balanceOf",
-            args: [address as `0x${string}`],
-          }) as Promise<bigint>;
-        }),
+            args: [address as `0x${string}`, TOKENS[symbol].address],
+          }) as Promise<bigint>,
+        ),
       );
       if (!cancelled) {
         const next: Partial<Record<SupportedToken, bigint>> = {};
@@ -42,7 +40,7 @@ export default function TokenSelector({ value, onChange }: TokenSelectorProps) {
     }
 
     loadBalances();
-    const interval = setInterval(loadBalances, 15_000);
+    const interval = setInterval(loadBalances, 5_000);
     return () => {
       cancelled = true;
       clearInterval(interval);
