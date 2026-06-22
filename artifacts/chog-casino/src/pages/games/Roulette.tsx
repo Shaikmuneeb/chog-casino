@@ -256,7 +256,11 @@ export default function Roulette() {
         const slotIndex = WHEEL_ORDER.indexOf(landed);
         setRotation(prev => {
           const prevMod = ((prev % 360) + 360) % 360;
-          const targetMod = slotIndex * SLOT_ANGLE;
+          // Segment i sits at angle i*SLOT_ANGLE clockwise from the top (see polar() below).
+          // Rotating the wheel clockwise by R moves that segment to angle i*SLOT_ANGLE + R —
+          // to land it under the fixed pointer (angle 0) we need R = -i*SLOT_ANGLE, not
+          // +i*SLOT_ANGLE (that was the bug: it always landed on the mirror-opposite segment).
+          const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
           let delta = targetMod - prevMod;
           if (delta <= 0) delta += 360;
           const fullSpins = 5 + Math.floor(Math.random() * 2);
@@ -294,7 +298,7 @@ export default function Roulette() {
       const slotIndex = WHEEL_ORDER.indexOf(outcome);
       setRotation(prev => {
         const prevMod = ((prev % 360) + 360) % 360;
-        const targetMod = slotIndex * SLOT_ANGLE;
+        const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
         let delta = targetMod - prevMod;
         if (delta <= 0) delta += 360;
         const fullSpins = 5 + Math.floor(Math.random() * 2);
