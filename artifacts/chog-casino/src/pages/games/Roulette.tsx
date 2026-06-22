@@ -163,6 +163,9 @@ export default function Roulette() {
   const [result, setResult] = useState<number | null>(null);
   const [winAmount, setWinAmount] = useState<number | null>(null);
   const [rotation, setRotation] = useState(0);
+  const [spinTransition, setSpinTransition] = useState<{ duration: number; ease: "linear" | [number, number, number, number] }>(
+    { duration: 2.3, ease: [0.25, 0.1, 0.25, 1] },
+  );
   const [showNumbers, setShowNumbers] = useState(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -236,16 +239,16 @@ export default function Roulette() {
       const kind: BetKind = isStraight ? 0 : betKindMap[betType] ?? 0;
       const straightNumber = typeof betType === "number" ? betType : 0;
 
-      // Start the spin animation immediately for feel, but the actual resolved bet comes back
-      // from the operator first — we only know which pocket to land the wheel on once that
-      // real result arrives, see below.
-      const SPIN_MS = 2300;
-      playSpinWhoosh(SPIN_MS / 1000);
-      const totalTicks = 28;
-      for (let i = 0; i < totalTicks; i++) {
-        const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
-        timersRef.current.push(setTimeout(playTick, t));
-      }
+      // The wheel must never sit motionless while waiting on the operator — that read as
+      // "stuck". So it spins continuously at a steady pace from the moment of the click, for
+      // as long as the real result takes; once that arrives, we retarget mid-flight to the
+      // exact correct pocket with a short decelerating finish. Framer Motion interpolates from
+      // wherever the wheel currently is when the target changes, so this retarget is seamless.
+      const WAIT_SPIN_MS = 6000;
+      const LANDING_MS = 2300;
+      playSpinWhoosh(WAIT_SPIN_MS / 1000);
+      setSpinTransition({ duration: WAIT_SPIN_MS / 1000, ease: "linear" });
+      setRotation(prev => prev + (WAIT_SPIN_MS / 1000) * 360);
 
       try {
         const outcome = await placeBetFromVault(realToken, String(realBetAmount), kind, straightNumber);
@@ -254,6 +257,14 @@ export default function Roulette() {
         // exactly the kind of contradiction that erodes trust in a real-money game.
         const landed = outcome.landedNumber ?? 0;
         const slotIndex = WHEEL_ORDER.indexOf(landed);
+
+        const totalTicks = 18;
+        for (let i = 0; i < totalTicks; i++) {
+          const t = LANDING_MS * Math.pow(i / totalTicks, 2.4);
+          timersRef.current.push(setTimeout(playTick, t));
+        }
+
+        setSpinTransition({ duration: LANDING_MS / 1000, ease: [0.25, 0.1, 0.25, 1] });
         setRotation(prev => {
           const prevMod = ((prev % 360) + 360) % 360;
           // Segment i sits at angle i*SLOT_ANGLE clockwise from the top (see polar() below).
@@ -263,7 +274,7 @@ export default function Roulette() {
           const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
           let delta = targetMod - prevMod;
           if (delta <= 0) delta += 360;
-          const fullSpins = 5 + Math.floor(Math.random() * 2);
+          const fullSpins = 2 + Math.floor(Math.random() * 2);
           return prev + fullSpins * 360 + delta;
         });
 
@@ -275,16 +286,18 @@ export default function Roulette() {
           setRealPayout(outcome.payoutAmount);
           setSpinning(false);
           playResultChime(won);
-        }, SPIN_MS));
+        }, LANDING_MS));
       } catch (err) {
+        setSpinTransition({ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] });
         timersRef.current.push(setTimeout(() => {
           setChainError(err instanceof Error ? err.message : "Bet failed");
           setSpinning(false);
-        }, SPIN_MS));
+        }, 400));
       }
     } else {
-      // Fun mode: client-side
+      // Fun mode: client-side, outcome known instantly — single decelerating spin, no waiting phase.
       updateBalance(b => b - bet);
+      setSpinTransition({ duration: 2.3, ease: [0.25, 0.1, 0.25, 1] });
 
       const SPIN_MS = 2300;
       playSpinWhoosh(SPIN_MS / 1000);
@@ -383,7 +396,7 @@ export default function Roulette() {
               <motion.svg
                 viewBox="0 0 380 380"
                 animate={{ rotate: rotation }}
-                transition={{ duration: 2.3, ease: [0.25, 0.1, 0.25, 1] }}
+                transition={spinTransition}
                 className="w-full h-full drop-shadow-2xl"
                 data-testid="roulette-wheel"
               >
