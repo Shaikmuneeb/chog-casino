@@ -78,12 +78,19 @@ async function sweep(
   let sweepTxHash: `0x${string}`;
 
   if (token === NATIVE_TOKEN) {
-    // Native sweep pays its own gas — reserve enough to cover it, sweep the rest.
-    const gasPrice = await publicClient.getGasPrice();
-    const gasCost = gasPrice * 21_000n;
+    // Native sweep pays its own gas — reserve enough to cover it, sweep the rest. The vault is
+    // a CONTRACT (its receive() actually executes), which costs more gas than a plain EOA-to-EOA
+    // transfer — a flat 21_000 here previously caused the sweep to run out of gas and revert
+    // on-chain while the code still credited the player as if it had succeeded. Estimate for
+    // real instead of assuming the bare minimum.
+    const [gasPrice, gasLimit] = await Promise.all([
+      publicClient.getGasPrice(),
+      publicClient.estimateGas({ account: depositClient.account, to: vaultAddress, value: 1n }),
+    ]);
+    const gasCost = gasPrice * gasLimit * 2n; // generous safety margin — this is dust money either way
     if (balance <= gasCost) return; // not worth sweeping yet (dust)
     swept = balance - gasCost;
-    sweepTxHash = await depositClient.sendTransaction({ to: vaultAddress, value: swept });
+    sweepTxHash = await depositClient.sendTransaction({ to: vaultAddress, value: swept, gas: gasLimit * 2n });
   } else {
     // ERC20 sweep needs the deposit address to hold a little MON for gas — top it up from the
     // vault operator's wallet first if it doesn't already have enough.
@@ -104,7 +111,16 @@ async function sweep(
     });
   }
 
-  await publicClient.waitForTransactionReceipt({ hash: sweepTxHash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: sweepTxHash });
+  if (receipt.status !== "success") {
+    // The transfer reverted on-chain (e.g. ran out of gas) — the deposit address still holds
+    // the real funds, untouched. Do NOT record this as a sweep or credit anything; the next
+    // poll cycle will see the same balance and try again. Crediting here would fabricate a
+    // balance the vault never actually received.
+    console.error(`[deposit-watcher] sweep tx ${sweepTxHash} from ${depositAddress} REVERTED on-chain — funds were not moved, not crediting`);
+    return;
+  }
+
   store.addSweep({
     owner,
     depositAddress,
