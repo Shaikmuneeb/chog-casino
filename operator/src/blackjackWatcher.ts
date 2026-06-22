@@ -1,9 +1,10 @@
-import { keccak256, parseEventLogs, toHex, type Address, type Hex, type TransactionReceipt } from "viem";
+import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex, type TransactionReceipt } from "viem";
 import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
 import { BLACKJACK_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config } from "./config.js";
 import { replayRound, type ReplayedRound } from "./blackjackReplay.js";
+import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
 
 type RoundTuple = readonly [
   string, // player
@@ -106,13 +107,14 @@ async function creditVaultIfWon(address: Address, receipt: TransactionReceipt, r
   }
 
   const betRef = keccak256(toHex(`${record.commitment}-payout`));
-  const hash = await vaultWalletClient.writeContract({
+  const hash = await writeWithGasBuffer(vaultWalletClient, {
     address: config.custodialVault,
-    abi: CUSTODIAL_VAULT_ABI,
+    abi: CUSTODIAL_VAULT_ABI as Abi,
     functionName: "credit",
     args: [record.vaultOwner!, token, totalPayout, betRef],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const creditReceipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(creditReceipt, `[watcher:blackjack] credit payout for ${record.vaultOwner}`);
   store.markVaultCredited(record.commitment, outcome);
   console.log(`[watcher:blackjack] credited vault-funded win: ${record.vaultOwner} +${totalPayout} of ${token}`);
 }
@@ -148,13 +150,14 @@ async function maybeResolve(address: Address, roundId: bigint, store: SeedStore)
   if (!record || record.resolved) return;
 
   try {
-    const hash = await walletClient.writeContract({
+    const hash = await writeWithGasBuffer(walletClient, {
       address,
-      abi: BLACKJACK_ABI,
+      abi: BLACKJACK_ABI as Abi,
       functionName: "revealAndResolve",
       args: [roundId, record.serverSeed],
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    assertTxSucceeded(receipt, `[watcher:blackjack] revealAndResolve for round ${roundId}`);
     store.markResolved(commitment, hash);
     console.log(`[watcher:blackjack] resolved round ${roundId} (tx ${hash})`);
 

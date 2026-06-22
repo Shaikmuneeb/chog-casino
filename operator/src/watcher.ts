@@ -1,8 +1,9 @@
-import { keccak256, parseEventLogs, toHex, type Address, type Hex, type TransactionReceipt } from "viem";
+import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex, type TransactionReceipt } from "viem";
 import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
 import { SINGLE_SHOT_GAME_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config, type GameName } from "./config.js";
+import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
 
 /**
  * Watches one single-shot game contract (CoinFlip/Dice/Roulette/Mines/Crash) for BetPlaced
@@ -83,13 +84,14 @@ async function reveal(game: GameName, address: Address, betId: bigint, store: Se
   if (!record || record.resolved) return;
 
   try {
-    const hash = await walletClient.writeContract({
+    const hash = await writeWithGasBuffer(walletClient, {
       address,
-      abi: SINGLE_SHOT_GAME_ABI,
+      abi: SINGLE_SHOT_GAME_ABI as Abi,
       functionName: "revealAndResolve",
       args: [betId, record.serverSeed],
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    assertTxSucceeded(receipt, `[watcher:${game}] revealAndResolve for bet ${betId}`);
     store.markResolved(commitment, hash);
     console.log(`[watcher:${game}] resolved bet ${betId} (tx ${hash})`);
 
@@ -129,13 +131,14 @@ async function creditVaultIfWon(game: GameName, receipt: TransactionReceipt, rec
   }
 
   const betRef = keccak256(toHex(`${record.commitment}-payout`));
-  const hash = await vaultWalletClient.writeContract({
+  const hash = await writeWithGasBuffer(vaultWalletClient, {
     address: config.custodialVault,
-    abi: CUSTODIAL_VAULT_ABI,
+    abi: CUSTODIAL_VAULT_ABI as Abi,
     functionName: "credit",
     args: [record.vaultOwner!, token, payoutAmount, betRef],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const creditReceipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(creditReceipt, `[watcher:${game}] credit payout for ${record.vaultOwner}`);
   store.markVaultCredited(record.commitment, outcome);
   console.log(`[watcher:${game}] credited vault-funded win: ${record.vaultOwner} +${payoutAmount} of ${token}`);
 }

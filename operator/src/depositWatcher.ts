@@ -1,8 +1,9 @@
-import { keccak256, toHex, type Address } from "viem";
+import { keccak256, toHex, type Abi, type Address } from "viem";
 import { publicClient, vaultWalletClient, vaultOperatorAccount, deriveDepositAccount, depositAddressClient } from "./chain.js";
 import { ERC20_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { DepositStore } from "./depositStore.js";
 import { config, NATIVE_TOKEN, DEPOSIT_TOKENS } from "./config.js";
+import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
 
 /**
  * Polls every known deposit address for MON/USDC/CHOG balances and sweeps anything found
@@ -103,9 +104,9 @@ async function sweep(
       await publicClient.waitForTransactionReceipt({ hash: topUpHash });
     }
     swept = balance;
-    sweepTxHash = await depositClient.writeContract({
+    sweepTxHash = await writeWithGasBuffer(depositClient, {
       address: token,
-      abi: ERC20_ABI,
+      abi: ERC20_ABI as Abi,
       functionName: "transfer",
       args: [vaultAddress, swept],
     });
@@ -144,13 +145,14 @@ async function creditSweep(
   sweepTxHash?: `0x${string}`,
 ) {
   const sweepRef = keccak256(toHex(sweepTxHash ?? `${depositAddress}-${token}-${amount}`));
-  const hash = await vaultWalletClient!.writeContract({
+  const hash = await writeWithGasBuffer(vaultWalletClient!, {
     address: config.custodialVault!,
-    abi: CUSTODIAL_VAULT_ABI,
+    abi: CUSTODIAL_VAULT_ABI as Abi,
     functionName: "credit",
     args: [owner, token, amount, sweepRef],
   });
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[deposit-watcher] credit for ${owner}`);
   store.markSweepCredited(depositAddress, token);
   console.log(`[deposit-watcher] credited ${owner} with ${amount} of ${token} (tx ${hash})`);
 }

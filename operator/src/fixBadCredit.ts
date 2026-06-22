@@ -1,7 +1,8 @@
-import { keccak256, toHex } from "viem";
+import { keccak256, toHex, type Abi } from "viem";
 import { publicClient, vaultWalletClient } from "./chain.js";
 import { CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { config, NATIVE_TOKEN } from "./config.js";
+import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
 
 /**
  * One-off correction for the fabricated balance caused by the now-fixed depositWatcher.ts bug
@@ -40,14 +41,15 @@ async function main() {
   }
 
   const ref = keccak256(toHex(`fix-bad-credit-${Date.now()}`));
-  const hash = await vaultWalletClient.writeContract({
+  const hash = await writeWithGasBuffer(vaultWalletClient, {
     address: config.custodialVault,
-    abi: CUSTODIAL_VAULT_ABI,
+    abi: CUSTODIAL_VAULT_ABI as Abi,
     functionName: "debit",
     args: [owner, token, amount, ref],
   });
   console.log(`Submitted debit tx ${hash}, waiting for confirmation...`);
-  await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, "fixBadCredit debit");
 
   const after = (await publicClient.readContract({
     address: config.custodialVault,

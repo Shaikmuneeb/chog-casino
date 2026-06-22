@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex, type TransactionReceipt } from "viem";
+import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex } from "viem";
 import { publicClient, walletClient, vaultWalletClient, operatorAccount } from "./chain.js";
 import { COINFLIP_ABI, DICE_ABI, ROULETTE_ABI, MINES_ABI, CRASH_ABI, BLACKJACK_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config, NATIVE_TOKEN, CHOG_ADDRESS, USDC_ADDRESS, type GameName } from "./config.js";
+import { writeWithGasBuffer, assertTxSucceeded as assertTxSucceededRaw } from "./txSafety.js";
 
 const SUPPORTED_TOKENS = new Set([NATIVE_TOKEN, CHOG_ADDRESS, USDC_ADDRESS]);
 
@@ -46,9 +47,9 @@ async function ensureOperatorAllowance(token: Address, amount: bigint) {
     args: [operatorAccount.address, config.treasury],
   })) as bigint;
   if (allowance < amount) {
-    const hash = await walletClient.writeContract({
+    const hash = await writeWithGasBuffer(walletClient, {
       address: token,
-      abi: ERC20_ABI,
+      abi: ERC20_ABI as Abi,
       functionName: "approve",
       args: [config.treasury, 2n ** 256n - 1n],
     });
@@ -57,23 +58,20 @@ async function ensureOperatorAllowance(token: Address, amount: bigint) {
   }
 }
 
-/** Every writeContract call here is preflight-simulated by viem, but the chain's actual state
- *  at inclusion time can differ from simulation time (a front-run, a solvency check that passed
- *  moments before and fails by the time it lands, etc.) — a mined-but-reverted transaction still
- *  produces a receipt, just with no event logs and status "reverted". Treating that the same as
- *  success (e.g. trying to decode a BetPlaced event that was never emitted) produces confusing,
- *  wrong error messages instead of the real one. */
-function assertTxSucceeded(receipt: TransactionReceipt, context: string) {
-  if (receipt.status !== "success") {
-    throw new VaultBetError(`${context} reverted on-chain (tx ${receipt.transactionHash})`, 500);
+/** Wraps the shared assertTxSucceeded so a revert surfaces as a proper VaultBetError here. */
+function assertTxSucceeded(receipt: Parameters<typeof assertTxSucceededRaw>[0], context: string) {
+  try {
+    assertTxSucceededRaw(receipt, context);
+  } catch (err) {
+    throw new VaultBetError(err instanceof Error ? err.message : String(err), 500);
   }
 }
 
 async function debitVault(owner: Address, token: Address, amount: bigint, ref: Hex, context: string) {
   try {
-    const debitHash = await vaultWalletClient!.writeContract({
+    const debitHash = await writeWithGasBuffer(vaultWalletClient!, {
       address: config.custodialVault!,
-      abi: CUSTODIAL_VAULT_ABI,
+      abi: CUSTODIAL_VAULT_ABI as Abi,
       functionName: "debit",
       args: [owner, token, amount, ref],
     });
@@ -125,7 +123,7 @@ async function placeSingleShotVaultBet(
     vaultOwner: owner,
   });
 
-  const hash = await walletClient.writeContract({
+  const hash = await writeWithGasBuffer(walletClient, {
     address,
     abi,
     functionName: "placeBet",
@@ -244,9 +242,9 @@ export async function placeBlackjackBet(
     vaultOwner: owner,
   });
 
-  const hash = await walletClient.writeContract({
+  const hash = await writeWithGasBuffer(walletClient, {
     address: config.blackjack,
-    abi: BLACKJACK_ABI,
+    abi: BLACKJACK_ABI as Abi,
     functionName: "placeBet",
     args: [token, amount, clientSeed, commitment],
     value: token === NATIVE_TOKEN ? amount : 0n,
@@ -271,9 +269,9 @@ export async function placeBlackjackBet(
 
 export async function blackjackHit(store: SeedStore, owner: Address, roundId: string, handIndex: number) {
   requireOwnedBlackjackRound(store, owner, roundId);
-  const hash = await walletClient.writeContract({
+  const hash = await writeWithGasBuffer(walletClient, {
     address: config.blackjack,
-    abi: BLACKJACK_ABI,
+    abi: BLACKJACK_ABI as Abi,
     functionName: "hit",
     args: [BigInt(roundId), handIndex],
   });
@@ -283,9 +281,9 @@ export async function blackjackHit(store: SeedStore, owner: Address, roundId: st
 
 export async function blackjackStand(store: SeedStore, owner: Address, roundId: string, handIndex: number) {
   requireOwnedBlackjackRound(store, owner, roundId);
-  const hash = await walletClient.writeContract({
+  const hash = await writeWithGasBuffer(walletClient, {
     address: config.blackjack,
-    abi: BLACKJACK_ABI,
+    abi: BLACKJACK_ABI as Abi,
     functionName: "stand",
     args: [BigInt(roundId), handIndex],
   });
@@ -308,9 +306,9 @@ export async function blackjackDouble(store: SeedStore, owner: Address, roundId:
   await assertSufficientVaultBalance(owner, token as Address, extraAmount);
   await ensureOperatorAllowance(token as Address, extraAmount);
 
-  const hash = await walletClient.writeContract({
+  const hash = await writeWithGasBuffer(walletClient, {
     address: config.blackjack,
-    abi: BLACKJACK_ABI,
+    abi: BLACKJACK_ABI as Abi,
     functionName: "double",
     args: [BigInt(roundId), handIndex],
     value: token === NATIVE_TOKEN ? extraAmount : 0n,
@@ -331,9 +329,9 @@ export async function blackjackSplit(store: SeedStore, owner: Address, roundId: 
   await assertSufficientVaultBalance(owner, token as Address, betHand0);
   await ensureOperatorAllowance(token as Address, betHand0);
 
-  const hash = await walletClient.writeContract({
+  const hash = await writeWithGasBuffer(walletClient, {
     address: config.blackjack,
-    abi: BLACKJACK_ABI,
+    abi: BLACKJACK_ABI as Abi,
     functionName: "split",
     args: [BigInt(roundId)],
     value: token === NATIVE_TOKEN ? betHand0 : 0n,
