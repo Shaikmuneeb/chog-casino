@@ -408,8 +408,33 @@ export default function Mines() {
                   )}
                 </div>
 
-                {/* Picks selector (real mode) or Mines selector (fun mode) */}
-                {isReal ? (
+                {/* Mines selector — always shown, real mode needs it just as much as fun mode
+                    since it's a required contract parameter, not just a fun-mode-only setting. */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
+                    Mines
+                  </label>
+                  <select
+                    value={mineCount}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setMineCount(next);
+                      if (isReal && picks > 25 - next) setPicks(25 - next);
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white bg-transparent text-sm focus:outline-none focus:border-purple-400/60 transition-colors appearance-none cursor-pointer"
+                    data-testid="select-mine-count"
+                  >
+                    {MINE_OPTIONS.map((n) => (
+                      <option key={n} value={n} className="bg-[#150828]">
+                        {n} {n === 1 ? "mine" : "mines"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Picks selector — real mode only, since the contract needs to know upfront
+                    how many safe tiles you're committing to clear in this one-shot bet. */}
+                {isReal && (
                   <div className="space-y-1.5">
                     <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
                       Picks (safe tiles to reveal)
@@ -423,24 +448,6 @@ export default function Mines() {
                       {Array.from({ length: 25 - mineCount }, (_, i) => i + 1).map((n) => (
                         <option key={n} value={n} className="bg-[#150828]">
                           {n} {n === 1 ? "pick" : "picks"}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
-                      Mines
-                    </label>
-                    <select
-                      value={mineCount}
-                      onChange={(e) => setMineCount(Number(e.target.value))}
-                      className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white bg-transparent text-sm focus:outline-none focus:border-purple-400/60 transition-colors appearance-none cursor-pointer"
-                      data-testid="select-mine-count"
-                    >
-                      {MINE_OPTIONS.map((n) => (
-                        <option key={n} value={n} className="bg-[#150828]">
-                          {n} {n === 1 ? "mine" : "mines"}
                         </option>
                       ))}
                     </select>
