@@ -41,15 +41,22 @@ export async function writeWithGasBuffer(
 /**
  * Settling a bet (revealAndResolve) has been observed to actually use ~25 million gas on
  * Monad — two confirmed past successes used 25,099,350 and 25,363,106 gas, despite the
- * contract logic itself being a couple of hashes and a storage write with no loops. Worse,
- * asking Monad's RPC to *estimate* gas for this call is unreliable at that magnitude: it can
- * outright revert with "Exceeds transaction gas limit" during estimation alone (this has been
- * seen for real on a stuck bet), even though the same call succeeds fine when actually sent
- * with a high enough explicit gas value. So for resolve-type calls, skip estimation entirely
- * and use a flat limit well above the observed real cost — 40M, comfortably under the chain's
- * 200M block gas limit.
+ * contract logic itself being a couple of hashes and a storage write with no loops.
+ *
+ * Worse: Monad's RPC enforces a hard per-transaction gas ceiling at *submission* time that's
+ * lower than its 200M block gas limit and not documented anywhere we could find — confirmed by
+ * direct experiment: `eth_call` simulation (e.g. `cast call --gas-limit`) accepts any gas value
+ * up to 40M+ with no complaint, since it's a stateless read with no real inclusion, but actually
+ * *sending* a transaction with gas=40,000,000 gets rejected outright with "Exceeds transaction
+ * gas limit" — a real RPC-node rejection (verified: this exact string doesn't appear anywhere in
+ * any installed library, so it's not a client-side check). The ceiling sits somewhere between
+ * the proven-working 25,363,106 and the proven-failing 40,000,000 — most likely the common
+ * go-ethereum-derived default of 30,000,000. 28M leaves room above the highest observed real
+ * cost while staying safely under that likely ceiling. If this value ever starts failing again,
+ * the bet is *not* lost (the stake stays collected in the Treasury until a resolve succeeds) —
+ * just lower this number further and restart.
  */
-const FLAT_RESOLVE_GAS = 40_000_000n;
+const FLAT_RESOLVE_GAS = 28_000_000n;
 
 export async function writeWithFlatResolveGas(
   client: MinimalWalletClient,
