@@ -239,32 +239,25 @@ export default function Roulette() {
       const kind: BetKind = isStraight ? 0 : betKindMap[betType] ?? 0;
       const straightNumber = typeof betType === "number" ? betType : 0;
 
-      // The wheel must never sit motionless while waiting on the operator — that read as
-      // "stuck". So it spins continuously at a steady pace from the moment of the click, for
-      // as long as the real result takes; once that arrives, we retarget mid-flight to the
-      // exact correct pocket with a short decelerating finish. Framer Motion interpolates from
-      // wherever the wheel currently is when the target changes, so this retarget is seamless.
-      const WAIT_SPIN_MS = 6000;
-      const LANDING_MS = 2300;
-      playSpinWhoosh(WAIT_SPIN_MS / 1000);
-      setSpinTransition({ duration: WAIT_SPIN_MS / 1000, ease: "linear" });
-      setRotation(prev => prev + (WAIT_SPIN_MS / 1000) * 360);
+      // We don't know which pocket to land the wheel on until the real on-chain result comes
+      // back, so the wheel waits (the pulsing glow + "Placing Bet…" button label below are the
+      // only feedback during this brief window) and only spins once, landing exactly on the
+      // real outcome — same clean single decelerating spin as fun mode, just on a real number.
+      setSpinTransition({ duration: 2.3, ease: [0.25, 0.1, 0.25, 1] });
 
       try {
         const outcome = await placeBetFromVault(realToken, String(realBetAmount), kind, straightNumber);
-        // The wheel must visually land on the REAL on-chain pocket — landing on a random
-        // number could show e.g. a black number lighting up "WIN" for a Red bet, which is
-        // exactly the kind of contradiction that erodes trust in a real-money game.
         const landed = outcome.landedNumber ?? 0;
         const slotIndex = WHEEL_ORDER.indexOf(landed);
 
-        const totalTicks = 18;
+        const SPIN_MS = 2300;
+        playSpinWhoosh(SPIN_MS / 1000);
+        const totalTicks = 28;
         for (let i = 0; i < totalTicks; i++) {
-          const t = LANDING_MS * Math.pow(i / totalTicks, 2.4);
+          const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
           timersRef.current.push(setTimeout(playTick, t));
         }
 
-        setSpinTransition({ duration: LANDING_MS / 1000, ease: [0.25, 0.1, 0.25, 1] });
         setRotation(prev => {
           const prevMod = ((prev % 360) + 360) % 360;
           // Segment i sits at angle i*SLOT_ANGLE clockwise from the top (see polar() below).
@@ -274,7 +267,7 @@ export default function Roulette() {
           const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
           let delta = targetMod - prevMod;
           if (delta <= 0) delta += 360;
-          const fullSpins = 2 + Math.floor(Math.random() * 2);
+          const fullSpins = 5 + Math.floor(Math.random() * 2);
           return prev + fullSpins * 360 + delta;
         });
 
@@ -286,13 +279,10 @@ export default function Roulette() {
           setRealPayout(outcome.payoutAmount);
           setSpinning(false);
           playResultChime(won);
-        }, LANDING_MS));
+        }, SPIN_MS));
       } catch (err) {
-        setSpinTransition({ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] });
-        timersRef.current.push(setTimeout(() => {
-          setChainError(err instanceof Error ? err.message : "Bet failed");
-          setSpinning(false);
-        }, 400));
+        setChainError(err instanceof Error ? err.message : "Bet failed");
+        setSpinning(false);
       }
     } else {
       // Fun mode: client-side, outcome known instantly — single decelerating spin, no waiting phase.
