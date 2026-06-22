@@ -322,6 +322,14 @@ export default function Mines() {
                 <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">Mines</div>
                 <div className="font-cinzel font-bold text-xl text-red-400">{mineCount}</div>
               </div>
+              {isReal && chainStakeHuman && gameState === "playing" && (
+                <div className="text-center" data-testid="mines-at-stake">
+                  <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-0.5">At Stake</div>
+                  <div className="font-cinzel font-bold text-xl text-yellow-200">
+                    {Number(chainStakeHuman).toFixed(4)} {realToken}
+                  </div>
+                </div>
+              )}
               <AnimatePresence mode="wait">
                 {gameState === "dead" && (
                   <motion.div
