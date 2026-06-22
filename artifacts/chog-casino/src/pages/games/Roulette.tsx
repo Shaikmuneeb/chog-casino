@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useMotionValue, animate as animateValue } from "framer-motion";
 import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
@@ -162,10 +162,11 @@ export default function Roulette() {
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState<number | null>(null);
   const [winAmount, setWinAmount] = useState<number | null>(null);
-  const [rotation, setRotation] = useState(0);
-  const [spinTransition, setSpinTransition] = useState<{ duration: number; ease: "linear" | [number, number, number, number] }>(
-    { duration: 2.3, ease: [0.25, 0.1, 0.25, 1] },
-  );
+  // Driven imperatively via animateValue() instead of React state — retargeting a motion value
+  // mid-flight (animateValue() called again on the same value) cleanly interrupts and continues
+  // from wherever it actually is, with no ambiguity about "current" vs "last requested target"
+  // the way two separate useState calls (rotation + its transition) had.
+  const rotationMV = useMotionValue(0);
   const [showNumbers, setShowNumbers] = useState(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -239,37 +240,37 @@ export default function Roulette() {
       const kind: BetKind = isStraight ? 0 : betKindMap[betType] ?? 0;
       const straightNumber = typeof betType === "number" ? betType : 0;
 
-      // We don't know which pocket to land the wheel on until the real on-chain result comes
-      // back, so the wheel waits (the pulsing glow + "Placing Bet…" button label below are the
-      // only feedback during this brief window) and only spins once, landing exactly on the
-      // real outcome — same clean single decelerating spin as fun mode, just on a real number.
-      setSpinTransition({ duration: 2.3, ease: [0.25, 0.1, 0.25, 1] });
+      // The wheel must never sit still while waiting on the operator. It spins continuously at
+      // a steady, constant speed for as long as the real result takes — when it arrives, we
+      // retarget (imperatively, via animateValue called again on the same motion value, which
+      // cleanly interrupts the in-flight spin from wherever it actually is) to land on the exact
+      // correct pocket using ONLY the natural leftover distance (0-360°, no extra padding spins
+      // crammed in), with a true ease-OUT curve (starts at full speed, decelerates to a stop).
+      const CONSTANT_SPIN_DEG_PER_SEC = 320;
+      animateValue(rotationMV, rotationMV.get() + CONSTANT_SPIN_DEG_PER_SEC * 8, { duration: 8, ease: "linear" });
 
       try {
         const outcome = await placeBetFromVault(realToken, String(realBetAmount), kind, straightNumber);
         const landed = outcome.landedNumber ?? 0;
         const slotIndex = WHEEL_ORDER.indexOf(landed);
 
-        const SPIN_MS = 2300;
-        playSpinWhoosh(SPIN_MS / 1000);
-        const totalTicks = 28;
+        const LANDING_MS = 1200;
+        const totalTicks = 10;
         for (let i = 0; i < totalTicks; i++) {
-          const t = SPIN_MS * Math.pow(i / totalTicks, 2.4);
+          const t = LANDING_MS * Math.pow(i / totalTicks, 1.6);
           timersRef.current.push(setTimeout(playTick, t));
         }
 
-        setRotation(prev => {
-          const prevMod = ((prev % 360) + 360) % 360;
-          // Segment i sits at angle i*SLOT_ANGLE clockwise from the top (see polar() below).
-          // Rotating the wheel clockwise by R moves that segment to angle i*SLOT_ANGLE + R —
-          // to land it under the fixed pointer (angle 0) we need R = -i*SLOT_ANGLE, not
-          // +i*SLOT_ANGLE (that was the bug: it always landed on the mirror-opposite segment).
-          const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
-          let delta = targetMod - prevMod;
-          if (delta <= 0) delta += 360;
-          const fullSpins = 5 + Math.floor(Math.random() * 2);
-          return prev + fullSpins * 360 + delta;
-        });
+        const current = rotationMV.get();
+        const prevMod = ((current % 360) + 360) % 360;
+        // Segment i sits at angle i*SLOT_ANGLE clockwise from the top (see polar() below).
+        // Rotating the wheel clockwise by R moves that segment to angle i*SLOT_ANGLE + R —
+        // to land it under the fixed pointer (angle 0) we need R = -i*SLOT_ANGLE, not
+        // +i*SLOT_ANGLE (that was the bug: it always landed on the mirror-opposite segment).
+        const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
+        let delta = targetMod - prevMod;
+        if (delta <= 0) delta += 360;
+        animateValue(rotationMV, current + delta, { duration: LANDING_MS / 1000, ease: [0, 0, 0.2, 1] });
 
         timersRef.current.push(setTimeout(() => {
           const won = outcome.won;
@@ -279,15 +280,17 @@ export default function Roulette() {
           setRealPayout(outcome.payoutAmount);
           setSpinning(false);
           playResultChime(won);
-        }, SPIN_MS));
+        }, LANDING_MS));
       } catch (err) {
-        setChainError(err instanceof Error ? err.message : "Bet failed");
-        setSpinning(false);
+        animateValue(rotationMV, rotationMV.get(), { duration: 0 });
+        timersRef.current.push(setTimeout(() => {
+          setChainError(err instanceof Error ? err.message : "Bet failed");
+          setSpinning(false);
+        }, 200));
       }
     } else {
-      // Fun mode: client-side, outcome known instantly — single decelerating spin, no waiting phase.
+      // Fun mode: outcome known instantly, no waiting phase needed — single decelerating spin.
       updateBalance(b => b - bet);
-      setSpinTransition({ duration: 2.3, ease: [0.25, 0.1, 0.25, 1] });
 
       const SPIN_MS = 2300;
       playSpinWhoosh(SPIN_MS / 1000);
@@ -299,14 +302,13 @@ export default function Roulette() {
 
       const outcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
       const slotIndex = WHEEL_ORDER.indexOf(outcome);
-      setRotation(prev => {
-        const prevMod = ((prev % 360) + 360) % 360;
-        const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
-        let delta = targetMod - prevMod;
-        if (delta <= 0) delta += 360;
-        const fullSpins = 5 + Math.floor(Math.random() * 2);
-        return prev + fullSpins * 360 + delta;
-      });
+      const current = rotationMV.get();
+      const prevMod = ((current % 360) + 360) % 360;
+      const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
+      let delta = targetMod - prevMod;
+      if (delta <= 0) delta += 360;
+      const fullSpins = 5 + Math.floor(Math.random() * 2);
+      animateValue(rotationMV, current + fullSpins * 360 + delta, { duration: SPIN_MS / 1000, ease: [0.25, 0.1, 0.25, 1] });
 
       timersRef.current.push(setTimeout(() => {
         const won = checkWin(outcome, betType);
@@ -385,8 +387,7 @@ export default function Roulette() {
               />
               <motion.svg
                 viewBox="0 0 380 380"
-                animate={{ rotate: rotation }}
-                transition={spinTransition}
+                style={{ rotate: rotationMV }}
                 className="w-full h-full drop-shadow-2xl"
                 data-testid="roulette-wheel"
               >
