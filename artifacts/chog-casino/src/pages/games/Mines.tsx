@@ -131,18 +131,19 @@ export default function Mines() {
   const { status: chainStatus, placeBetFromVault } = useMinesOnChain();
   const deployed = isDeployed(CONTRACTS.mines) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
-  // Real mode: the player clicks tiles to select which ones to bet on (before placing the bet)
-  // instead of picking a number from a dropdown — the tile count becomes the contract's "picks"
-  // parameter once they confirm. Mines.sol resolves the whole bet in one shot with no on-chain
-  // concept of tile position, so the actual reveal animation below is cosmetic, played out after
-  // the real win/loss outcome is already known — see animateRealResult.
-  const [selectedTiles, setSelectedTiles] = useState<number[]>([]);
+  // Real mode bets one tile at a time: Mines.sol resolves a bet atomically with no on-chain
+  // concept of "reveal more later," so every tile click during play is its own real placeBet
+  // call (picks=1, mineCount), using whatever is currently at stake as the amount. A win's
+  // payout becomes the stake for the next click; cashing out just means stopping — each win
+  // is already credited to the vault as it resolves, so there's nothing left to do on-chain.
+  const [chainStakeHuman, setChainStakeHuman] = useState<string | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
 
   // Real-mode balance loading
   const realBalanceHuman = Math.floor(Number(formatUnits(realBalanceRaw, TOKENS[realToken].decimals)));
 
   const canStart = isReal
-    ? connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman && selectedTiles.length > 0
+    ? connected && realBetAmount > 0 && realBetAmount <= realBalanceHuman
     : !gated && bet > 0 && bet <= balance;
 
   useEffect(() => {
@@ -171,99 +172,67 @@ export default function Mines() {
     setGameState("idle");
     setChainError(null);
     setRealPayout(null);
-    setSelectedTiles([]);
+    setChainStakeHuman(null);
+    setIsResolving(false);
     setGrid(Array(GRID_SIZE).fill("hidden"));
     setRevealed(Array(GRID_SIZE).fill(false));
   }, [isReal]);
 
-  /** Tile clicks in real mode select which tiles to bet on, before any bet is placed — clicking
-   *  after a round has finished starts a fresh selection for the next one. */
-  const toggleTileSelection = useCallback(
-    (i: number) => {
-      if (gameState === "dead" || gameState === "cashed") {
-        setGrid(Array(GRID_SIZE).fill("hidden"));
-        setRevealed(Array(GRID_SIZE).fill(false));
-        setGameState("idle");
-        setChainError(null);
-        setRealPayout(null);
-        setSelectedTiles([i]);
-        return;
+  /** Each tile click during a real-mode round is its own on-chain bet (picks=1, mineCount),
+   *  staking whatever is currently "in the chain" — the original bet amount on the first click,
+   *  or the previous click's payout if the player chose to keep going instead of cashing out. */
+  const playRealTile = useCallback(
+    async (i: number) => {
+      if (gameState !== "playing" || revealed[i] || isResolving || !chainStakeHuman) return;
+      setIsResolving(true);
+      setChainError(null);
+      try {
+        const outcome = await placeBetFromVault(realToken, chainStakeHuman, 1, mineCount);
+        setRealPayout(outcome.payoutAmount);
+        setGrid((prev) => {
+          const next = [...prev];
+          next[i] = outcome.won ? "safe" : "mine";
+          return next;
+        });
+        setRevealed((prev) => {
+          const next = [...prev];
+          next[i] = true;
+          return next;
+        });
+        if (outcome.won) {
+          playSafe();
+          const safe = safeRevealed + 1;
+          setSafeRevealed(safe);
+          const payoutHuman = formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals);
+          setMultiplier(Number(payoutHuman) / realBetAmount);
+          setChainStakeHuman(payoutHuman);
+        } else {
+          playBomb();
+          setGameState("dead");
+        }
+      } catch (err) {
+        setChainError(err instanceof Error ? err.message : "Bet failed");
+      } finally {
+        setIsResolving(false);
       }
-      if (gameState !== "idle") return;
-      setSelectedTiles((prev) => {
-        if (prev.includes(i)) return prev.filter((x) => x !== i);
-        if (prev.length >= GRID_SIZE - mineCount) return prev;
-        return [...prev, i];
-      });
     },
-    [gameState, mineCount],
+    [gameState, revealed, isResolving, chainStakeHuman, placeBetFromVault, realToken, mineCount, safeRevealed, realBetAmount],
   );
-
-  /** Plays out the already-decided outcome as a tile-by-tile reveal, in the order the player
-   *  picked them — stopping at the mine on a loss, revealing the whole board on a win. */
-  const animateRealResult = useCallback(async (selected: number[], won: boolean, mines: number) => {
-    const finalGrid: CellState[] = Array(GRID_SIZE).fill("hidden");
-    let revealOrder: number[];
-
-    if (won) {
-      selected.forEach((idx) => (finalGrid[idx] = "safe"));
-      const unselected = Array.from({ length: GRID_SIZE }, (_, i) => i).filter((i) => !selected.includes(i));
-      const mineIdxs = new Set<number>();
-      while (mineIdxs.size < Math.min(mines, unselected.length)) {
-        mineIdxs.add(unselected[Math.floor(Math.random() * unselected.length)]);
-      }
-      mineIdxs.forEach((idx) => (finalGrid[idx] = "mine"));
-      revealOrder = selected;
-    } else {
-      const bustPos = Math.floor(Math.random() * selected.length);
-      selected.forEach((idx, pos) => {
-        finalGrid[idx] = pos === bustPos ? "mine" : "safe";
-      });
-      revealOrder = selected.slice(0, bustPos + 1);
-      setSafeRevealed(bustPos);
-    }
-
-    setGrid(finalGrid);
-    setRevealed(Array(GRID_SIZE).fill(false));
-
-    for (const idx of revealOrder) {
-      await new Promise((r) => setTimeout(r, 350));
-      setRevealed((prev) => {
-        const next = [...prev];
-        next[idx] = true;
-        return next;
-      });
-      if (finalGrid[idx] === "mine") playBomb();
-      else playSafe();
-    }
-
-    if (won) {
-      await new Promise((r) => setTimeout(r, 400));
-      setRevealed(Array(GRID_SIZE).fill(true));
-    }
-
-    setGameState(won ? "cashed" : "dead");
-  }, []);
 
   const start = async () => {
     if (!canStart) return;
 
     if (isReal) {
-      // Real mode: place on-chain bet using however many tiles the player selected as "picks"
+      // Real mode: lock in the bet amount and mine count, then go "playing" — the actual
+      // on-chain bet happens per tile click, see playRealTile above.
       setChainError(null);
       setRealPayout(null);
-      try {
-        const outcome = await placeBetFromVault(realToken, String(realBetAmount), selectedTiles.length, mineCount);
-        setRealPayout(outcome.payoutAmount);
-        if (outcome.won) {
-          setMultiplier(Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals)) / realBetAmount);
-          setSafeRevealed(selectedTiles.length);
-        }
-        await animateRealResult(selectedTiles, outcome.won, mineCount);
-      } catch (err) {
-        setChainError(err instanceof Error ? err.message : "Bet failed");
-        setGameState("idle");
-      }
+      setGrid(Array(GRID_SIZE).fill("hidden"));
+      setRevealed(Array(GRID_SIZE).fill(false));
+      setSafeRevealed(0);
+      setMultiplier(1);
+      setChainStakeHuman(String(realBetAmount));
+      setGameState("playing");
     } else {
       // Fun mode: client-side
       const newGrid = generateGrid(mineCount);
@@ -298,7 +267,13 @@ export default function Mines() {
   );
 
   const cashOut = () => {
-    if (gameState !== "playing" || safeRevealed === 0) return;
+    if (gameState !== "playing" || safeRevealed === 0 || isResolving) return;
+    if (isReal) {
+      // Each winning tile click already credited its payout to the vault as it resolved —
+      // there's nothing left to settle on-chain, cashing out just stops the chain here.
+      setGameState("cashed");
+      return;
+    }
     updateBalance(b => b + Math.round(bet * multiplier));
     setGameState("cashed");
     setRevealed(Array(GRID_SIZE).fill(true));
@@ -379,29 +354,28 @@ export default function Mines() {
             {Array(GRID_SIZE).fill(null).map((_, i) => {
               const isRevealed = revealed[i];
               const isMine = grid[i] === "mine";
-              const isSelected = isReal && selectedTiles.includes(i);
-              const isClickable = isReal ? !isRevealed && (gameState === "idle" || isOver) : isActive && !isRevealed;
+              const isClickable = isReal
+                ? gameState === "playing" && !isRevealed && !isResolving
+                : isActive && !isRevealed;
 
               return (
                 <motion.button
                   key={i}
                   whileHover={isClickable ? { scale: 1.07, y: -1 } : {}}
                   whileTap={isClickable ? { scale: 0.93 } : {}}
-                  onClick={() => (isReal ? toggleTileSelection(i) : reveal(i))}
+                  onClick={() => (isReal ? playRealTile(i) : reveal(i))}
                   disabled={!isClickable}
                   initial={false}
                   animate={
                     isRevealed
                       ? { scale: [0.85, 1.05, 1], opacity: 1 }
-                      : { scale: 1, opacity: gameState === "idle" && !isSelected ? 0.5 : 1 }
+                      : { scale: 1, opacity: gameState === "idle" || (isReal && isResolving) ? 0.5 : 1 }
                   }
                   transition={{ duration: 0.25 }}
                   className={`aspect-square rounded-lg flex items-center justify-center border transition-colors duration-150 ${
                     !isRevealed
-                      ? isSelected
-                        ? "glass border-yellow-400/70 bg-yellow-500/10 cursor-pointer"
-                        : gameState === "idle" || isOver
-                        ? "glass border-purple-700/20 hover:border-purple-400/50 cursor-pointer"
+                      ? gameState === "idle"
+                        ? "glass border-purple-700/20 cursor-default"
                         : "glass border-purple-500/40 hover:border-purple-400/70 cursor-pointer"
                       : isMine
                       ? "bg-red-950/70 border-red-500/50"
@@ -480,21 +454,15 @@ export default function Mines() {
                   )}
                 </div>
 
-                {/* Mines selector — in real mode, click tiles on the grid above to choose how
-                    many you're betting on instead of a separate "picks" dropdown. */}
+                {/* Mines selector — locked in for the whole round once you hit Bet; in real
+                    mode each tile click afterward is its own live bet against this count. */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] text-purple-300/50 tracking-widest uppercase font-medium block">
-                    Mines{isReal && selectedTiles.length > 0 ? ` · ${selectedTiles.length} tile${selectedTiles.length === 1 ? "" : "s"} selected` : ""}
+                    Mines
                   </label>
                   <select
                     value={mineCount}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      setMineCount(next);
-                      if (isReal && selectedTiles.length > 25 - next) {
-                        setSelectedTiles((prev) => prev.slice(0, 25 - next));
-                      }
-                    }}
+                    onChange={(e) => setMineCount(Number(e.target.value))}
                     className="w-full px-3 py-2.5 rounded-xl glass border border-purple-500/30 text-white bg-transparent text-sm focus:outline-none focus:border-purple-400/60 transition-colors appearance-none cursor-pointer"
                     data-testid="select-mine-count"
                   >
@@ -504,13 +472,16 @@ export default function Mines() {
                       </option>
                     ))}
                   </select>
-                  {isReal && (
-                    <p className="text-[10px] text-purple-300/40">Click tiles on the board to choose what to bet on.</p>
-                  )}
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
+
+          {isReal && gameState === "playing" && (
+            <p className="text-[10px] text-purple-300/40 text-center">
+              {isResolving ? "Placing bet…" : "Tap a tile to bet on it — cash out anytime."}
+            </p>
+          )}
 
 
           {/* Action buttons */}
@@ -535,8 +506,6 @@ export default function Mines() {
                     ? "Awaiting Result…"
                     : realBalanceHuman <= 0
                     ? `Out of ${realToken}`
-                    : selectedTiles.length === 0
-                    ? "Pick a Tile First"
                     : "Bet"
                   : balance <= 0
                   ? `Out of ${currencyLabel}`
@@ -559,7 +528,7 @@ export default function Mines() {
               whileHover={{ scale: 1.02, y: -1 }}
               whileTap={{ scale: 0.98 }}
               onClick={cashOut}
-              disabled={safeRevealed === 0}
+              disabled={safeRevealed === 0 || isResolving}
               className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.15em] uppercase bg-gradient-to-r from-green-600 to-green-800 text-white border border-green-400/30 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
               data-testid="button-cashout"
             >
