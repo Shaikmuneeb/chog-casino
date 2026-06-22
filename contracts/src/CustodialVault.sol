@@ -34,6 +34,12 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
 
     mapping(address => mapping(address => uint256)) public balanceOf;
 
+    /// @dev Sum of every player's balanceOf for a token — what the vault owes out in total.
+    /// adminWithdraw is capped by this so the admin can never pull the contract below what it
+    /// owes players, no matter how many times it's called or how the operator's bookkeeping
+    /// drifted getting there.
+    mapping(address => uint256) public totalLiabilities;
+
     event Credited(address indexed player, address indexed token, uint256 amount, bytes32 indexed sweepRef);
     event Debited(address indexed player, address indexed token, uint256 amount, bytes32 indexed betRef);
     event Withdrawn(address indexed player, address indexed token, uint256 amount);
@@ -60,6 +66,7 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
         require(token == NATIVE_TOKEN || token == CHOG || token == USDC, "unsupported token");
         require(amount > 0, "zero amount");
         balanceOf[player][token] += amount;
+        totalLiabilities[token] += amount;
         emit Credited(player, token, amount, sweepRef);
     }
 
@@ -76,6 +83,7 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
         uint256 bal = balanceOf[player][token];
         require(bal >= amount, "insufficient balance");
         balanceOf[player][token] = bal - amount;
+        totalLiabilities[token] -= amount;
         emit Debited(player, token, amount, betRef);
     }
 
@@ -86,6 +94,7 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
         require(bal >= amount, "insufficient balance");
 
         balanceOf[msg.sender][token] = bal - amount;
+        totalLiabilities[token] -= amount;
 
         if (token == NATIVE_TOKEN) {
             (bool ok, ) = payable(msg.sender).call{value: amount}("");
@@ -99,12 +108,14 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
 
     // ── Admin ──
 
-    /// @dev Lets the admin pull funds out in an emergency (e.g. migrating to a new vault).
-    /// Does NOT touch player balance accounting — only use this for funds that aren't backing
-    /// any credited balance (e.g. recovering an accidental over-sweep).
+    /// @dev Lets the admin recover funds that aren't backing any credited balance (e.g. an
+    /// accidental over-sweep, or dust). Does NOT touch player balance accounting, and — crucially
+    /// — can never pull the contract's real balance below totalLiabilities[token], so the admin
+    /// can never leave a credited player unable to withdraw, even by mistake or repeated calls.
     function adminWithdraw(address token, uint256 amount, address to) external onlyRole(ADMIN_ROLE) nonReentrant {
         require(to != address(0), "bad recipient");
         require(getBalance(token) >= amount, "insufficient balance");
+        require(getBalance(token) - amount >= totalLiabilities[token], "would breach player liabilities");
 
         if (token == NATIVE_TOKEN) {
             (bool ok, ) = payable(to).call{value: amount}("");

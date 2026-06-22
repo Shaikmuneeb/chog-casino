@@ -166,4 +166,44 @@ contract CustodialVaultTest is Test {
         assertEq(vault.balanceOf(player, NATIVE), 10 ether);
         assertEq(vault.getBalance(NATIVE), vaultBalBefore - 5 ether);
     }
+
+    /// Regression test for a real production incident: repeated credit() calls (e.g. from a
+    /// deposit watcher re-sweeping the same recycled funds) followed by adminWithdraw pulling
+    /// the real backing money out left a player's tracked balance pointing at money the
+    /// contract no longer had — every later withdraw() reverted with no funds to pay out. The
+    /// liability floor must make that specific sequence impossible.
+    function test_AdminWithdrawCannotBreachPlayerLiabilities() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        // Only 1000 - 10 = 990 ether of the vault's balance is "excess" (not backing any
+        // player's credited balance) — admin can drain all of that...
+        vm.prank(admin);
+        vault.adminWithdraw(NATIVE, 990 ether, admin);
+
+        // ...but trying to take even 1 wei more, which would dip into the player's 10 ether,
+        // must revert instead of silently making the player's future withdraw() impossible.
+        vm.prank(admin);
+        vm.expectRevert(bytes("would breach player liabilities"));
+        vault.adminWithdraw(NATIVE, 1, admin);
+
+        // The player can still withdraw their full credited balance afterward.
+        vm.prank(player);
+        vault.withdraw(NATIVE, 10 ether);
+        assertEq(vault.balanceOf(player, NATIVE), 0);
+    }
+
+    function test_TotalLiabilitiesTracksCreditDebitAndWithdraw() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+        assertEq(vault.totalLiabilities(NATIVE), 10 ether);
+
+        vm.prank(operator);
+        vault.debit(player, NATIVE, 3 ether, bytes32("bet-1"));
+        assertEq(vault.totalLiabilities(NATIVE), 7 ether);
+
+        vm.prank(player);
+        vault.withdraw(NATIVE, 2 ether);
+        assertEq(vault.totalLiabilities(NATIVE), 5 ether);
+    }
 }
