@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex } from "viem";
+import { encodePacked, keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex } from "viem";
 import { publicClient, walletClient, vaultWalletClient, operatorAccount } from "./chain.js";
 import { COINFLIP_ABI, DICE_ABI, ROULETTE_ABI, MINES_ABI, CRASH_ABI, BLACKJACK_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
@@ -348,16 +348,40 @@ export interface VaultBetResult {
   won?: boolean;
   payoutAmount?: string;
   token?: Address;
+  /** The actual landed roulette pocket (0-36), matching Roulette.sol's exact formula —
+   *  present only for game === "roulette". */
+  rouletteNumber?: number;
+  /** The actual dice roll (0-99), matching Dice.sol's exact formula — present only for
+   *  game === "dice". */
+  diceRoll?: number;
+}
+
+/** Reproduces BaseGame.sol's `randomNumber = keccak256(abi.encodePacked(serverSeed,
+ *  clientSeedOf[betId], betId))` exactly, so the frontend can show the real on-chain outcome
+ *  (e.g. which roulette pocket it actually landed on) instead of a cosmetic random animation
+ *  that can contradict the real win/loss. */
+function computeRandomNumber(serverSeed: Hex, clientSeed: Hex, betId: string): bigint {
+  const packed = encodePacked(["bytes32", "bytes32", "uint256"], [serverSeed, clientSeed, BigInt(betId)]);
+  return BigInt(keccak256(packed));
 }
 
 export function getVaultBetResult(store: SeedStore, game: string, betRef: string): VaultBetResult | undefined {
   const record = store.findByBetRef(game, betRef);
   if (!record) return undefined;
   if (!record.resolved || !record.vaultOutcome) return { resolved: false };
-  return {
+
+  const result: VaultBetResult = {
     resolved: true,
     won: record.vaultOutcome.won,
     payoutAmount: record.vaultOutcome.payoutAmount,
     token: record.vaultOutcome.token,
   };
+
+  if (game === "roulette" || game === "dice") {
+    const randomNumber = computeRandomNumber(record.serverSeed, record.clientSeed, betRef);
+    if (game === "roulette") result.rouletteNumber = Number(randomNumber % 37n);
+    if (game === "dice") result.diceRoll = Number(randomNumber % 100n);
+  }
+
+  return result;
 }

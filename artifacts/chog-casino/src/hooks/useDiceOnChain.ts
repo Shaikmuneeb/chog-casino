@@ -47,6 +47,9 @@ const ZERO_BYTES32 = `0x${"0".repeat(64)}` as const;
 export interface DiceOutcome {
   won: boolean;
   payoutAmount: bigint;
+  /** The actual roll (0-99), only set by placeBetFromVault — see RouletteOutcome's
+   *  landedNumber for why the wallet-direct placeBet path above doesn't have this. */
+  roll?: number;
 }
 
 async function requestCommitment(): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
@@ -166,7 +169,7 @@ export function useDiceOnChain() {
         const result = await pollVaultBetResult("dice", betRef);
         setStatus("idle");
 
-        return { won: Boolean(result.won), payoutAmount: BigInt(result.payoutAmount ?? "0") };
+        return { won: Boolean(result.won), payoutAmount: BigInt(result.payoutAmount ?? "0"), roll: result.diceRoll };
       } catch (err) {
         setStatus("idle");
         throw err;

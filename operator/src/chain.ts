@@ -11,7 +11,10 @@ export const monad = defineChain({
   rpcUrls: { default: { http: [config.rpcUrl] } },
 });
 
-export const publicClient = createPublicClient({ chain: monad, transport: http(config.rpcUrl) });
+// viem's default pollingInterval (4000ms) for watchContractEvent means a placed bet can sit
+// unnoticed for up to 4s before the watcher even starts resolving it — tightened to 1s so the
+// whole place-to-result round trip feels responsive instead of sluggish.
+export const publicClient = createPublicClient({ chain: monad, transport: http(config.rpcUrl), pollingInterval: 1_000 });
 
 export const operatorAccount = privateKeyToAccount(config.operatorPrivateKey);
 

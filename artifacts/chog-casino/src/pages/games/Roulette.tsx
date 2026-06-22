@@ -236,7 +236,9 @@ export default function Roulette() {
       const kind: BetKind = isStraight ? 0 : betKindMap[betType] ?? 0;
       const straightNumber = typeof betType === "number" ? betType : 0;
 
-      // Start animation
+      // Start the spin animation immediately for feel, but the actual resolved bet comes back
+      // from the operator first — we only know which pocket to land the wheel on once that
+      // real result arrives, see below.
       const SPIN_MS = 2300;
       playSpinWhoosh(SPIN_MS / 1000);
       const totalTicks = 28;
@@ -245,24 +247,26 @@ export default function Roulette() {
         timersRef.current.push(setTimeout(playTick, t));
       }
 
-      // Random visual outcome for animation
-      const visualOutcome = NUMBERS[Math.floor(Math.random() * NUMBERS.length)];
-      const slotIndex = WHEEL_ORDER.indexOf(visualOutcome);
-      setRotation(prev => {
-        const prevMod = ((prev % 360) + 360) % 360;
-        const targetMod = slotIndex * SLOT_ANGLE;
-        let delta = targetMod - prevMod;
-        if (delta <= 0) delta += 360;
-        const fullSpins = 5 + Math.floor(Math.random() * 2);
-        return prev + fullSpins * 360 + delta;
-      });
-
       try {
         const outcome = await placeBetFromVault(realToken, String(realBetAmount), kind, straightNumber);
+        // The wheel must visually land on the REAL on-chain pocket — landing on a random
+        // number could show e.g. a black number lighting up "WIN" for a Red bet, which is
+        // exactly the kind of contradiction that erodes trust in a real-money game.
+        const landed = outcome.landedNumber ?? 0;
+        const slotIndex = WHEEL_ORDER.indexOf(landed);
+        setRotation(prev => {
+          const prevMod = ((prev % 360) + 360) % 360;
+          const targetMod = slotIndex * SLOT_ANGLE;
+          let delta = targetMod - prevMod;
+          if (delta <= 0) delta += 360;
+          const fullSpins = 5 + Math.floor(Math.random() * 2);
+          return prev + fullSpins * 360 + delta;
+        });
+
         timersRef.current.push(setTimeout(() => {
           const won = outcome.won;
           const payout = won ? Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals)) : 0;
-          setResult(visualOutcome);
+          setResult(landed);
           setWinAmount(won ? payout : -realBetAmount);
           setRealPayout(outcome.payoutAmount);
           setSpinning(false);

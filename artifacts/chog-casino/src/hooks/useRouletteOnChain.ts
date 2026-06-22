@@ -55,6 +55,10 @@ const ZERO_BYTES32 = `0x${"0".repeat(64)}` as const;
 export interface RouletteOutcome {
   won: boolean;
   payoutAmount: bigint;
+  /** The actual pocket the wheel landed on (0-36), only set by placeBetFromVault — the
+   *  wallet-direct placeBet path below doesn't have this since the contract's BetResolved
+   *  event doesn't carry it; that path is unused by the live UI (vault betting only). */
+  landedNumber?: number;
 }
 
 async function requestCommitment(): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
@@ -184,7 +188,11 @@ export function useRouletteOnChain() {
         const result = await pollVaultBetResult("roulette", betRef);
         setStatus("idle");
 
-        return { won: Boolean(result.won), payoutAmount: BigInt(result.payoutAmount ?? "0") };
+        return {
+          won: Boolean(result.won),
+          payoutAmount: BigInt(result.payoutAmount ?? "0"),
+          landedNumber: result.rouletteNumber,
+        };
       } catch (err) {
         setStatus("idle");
         throw err;

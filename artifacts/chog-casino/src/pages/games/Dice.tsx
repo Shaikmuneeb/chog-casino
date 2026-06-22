@@ -221,13 +221,11 @@ export default function Dice() {
     try {
       const outcome = await placeBetFromVault(realToken, String(realBetAmount), target, direction === "under");
       clearInterval(interval);
-      // The contract resolves the roll — we don't know the exact number, but we know won/lost
       const won = outcome.won;
-      // For display: show a random roll that matches the outcome direction
-      const result = won
-        ? (direction === "under" ? Math.random() * (target - 1) + 0.01 : Math.random() * (100 - target) + target + 0.01)
-        : (direction === "under" ? Math.random() * (100 - target) + target : Math.random() * target);
-      const roundedResult = Math.round(result * 100) / 100;
+      // The operator computes the real roll from the same serverSeed/clientSeed/betId the
+      // contract used — showing anything else risks displaying a roll that contradicts the
+      // win/loss (e.g. a number on the wrong side of the target for a "win").
+      const roundedResult = outcome.roll ?? 0;
       setDisplayRoll(roundedResult);
       setLastRoll(roundedResult);
       setLastWin(won);

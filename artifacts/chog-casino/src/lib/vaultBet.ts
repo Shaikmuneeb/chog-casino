@@ -7,6 +7,11 @@ export interface VaultBetResult {
   won?: boolean;
   payoutAmount?: string;
   token?: `0x${string}`;
+  /** Present only for roulette — the actual landed pocket (0-36), computed by the operator
+   *  from the exact same formula the contract used to resolve the bet. */
+  rouletteNumber?: number;
+  /** Present only for dice — the actual roll (0-99), computed the same way. */
+  diceRoll?: number;
 }
 
 async function postToOperator<R>(path: string, body: Record<string, unknown>): Promise<R> {
