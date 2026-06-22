@@ -39,6 +39,32 @@ export async function writeWithGasBuffer(
 }
 
 /**
+ * Settling a bet (revealAndResolve) has been observed to actually use ~25 million gas on
+ * Monad — two confirmed past successes used 25,099,350 and 25,363,106 gas, despite the
+ * contract logic itself being a couple of hashes and a storage write with no loops. Worse,
+ * asking Monad's RPC to *estimate* gas for this call is unreliable at that magnitude: it can
+ * outright revert with "Exceeds transaction gas limit" during estimation alone (this has been
+ * seen for real on a stuck bet), even though the same call succeeds fine when actually sent
+ * with a high enough explicit gas value. So for resolve-type calls, skip estimation entirely
+ * and use a flat limit well above the observed real cost — 40M, comfortably under the chain's
+ * 200M block gas limit.
+ */
+const FLAT_RESOLVE_GAS = 40_000_000n;
+
+export async function writeWithFlatResolveGas(
+  client: MinimalWalletClient,
+  params: {
+    address: Address;
+    abi: Abi;
+    functionName: string;
+    args: readonly unknown[];
+    value?: bigint;
+  },
+): Promise<Hex> {
+  return client.writeContract({ ...params, gas: FLAT_RESOLVE_GAS });
+}
+
+/**
  * Every writeContract call is preflight-simulated by viem, but the chain's actual state at
  * inclusion time can differ from simulation time (a front-run, a solvency check that passed
  * moments before and fails by the time it lands, an out-of-gas edge case, etc.) — a

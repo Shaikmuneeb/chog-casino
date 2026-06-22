@@ -3,7 +3,7 @@ import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
 import { SINGLE_SHOT_GAME_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config, type GameName } from "./config.js";
-import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
+import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded } from "./txSafety.js";
 
 /**
  * Watches one single-shot game contract (CoinFlip/Dice/Roulette/Mines/Crash) for BetPlaced
@@ -84,7 +84,7 @@ async function reveal(game: GameName, address: Address, betId: bigint, store: Se
   if (!record || record.resolved) return;
 
   try {
-    const hash = await writeWithGasBuffer(walletClient, {
+    const hash = await writeWithFlatResolveGas(walletClient, {
       address,
       abi: SINGLE_SHOT_GAME_ABI as Abi,
       functionName: "revealAndResolve",

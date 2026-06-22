@@ -4,7 +4,7 @@ import { BLACKJACK_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config } from "./config.js";
 import { replayRound, type ReplayedRound } from "./blackjackReplay.js";
-import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
+import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded } from "./txSafety.js";
 
 type RoundTuple = readonly [
   string, // player
@@ -150,7 +150,7 @@ async function maybeResolve(address: Address, roundId: bigint, store: SeedStore)
   if (!record || record.resolved) return;
 
   try {
-    const hash = await writeWithGasBuffer(walletClient, {
+    const hash = await writeWithFlatResolveGas(walletClient, {
       address,
       abi: BLACKJACK_ABI as Abi,
       functionName: "revealAndResolve",
