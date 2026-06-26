@@ -10,7 +10,62 @@ interface MinimalWalletClient {
     args: readonly unknown[];
     value?: bigint;
     gas?: bigint;
+    nonce?: number;
   }) => Promise<Hex>;
+  sendTransaction?: (args: { to: Address; value: bigint; nonce?: number }) => Promise<Hex>;
+}
+
+/**
+ * Every transaction sent by a given account must get a strictly increasing nonce. Mines'
+ * real-mode flow fires a brand new placeBet for *every tile click*, and each placeBet also
+ * kicks off its own revealAndResolve in the background (see vaultBet.ts), so two writes from the
+ * same operator wallet can legitimately be in flight close together.
+ *
+ * Naively serializing the JS-side calls (queue each write, don't start the next until the
+ * previous one's writeContract() promise resolves) is *not* enough on its own — confirmed by
+ * direct reproduction. viem's default nonce behavior asks the RPC for the account's "pending"
+ * transaction count on every call, and Monad's node doesn't reliably reflect a just-broadcast
+ * transaction in that count immediately, so the very next call can still get back the same
+ * nonce as the one before it. The second send then fails with "An existing transaction had
+ * higher priority" — a real on-chain rejection, not a bug in the contract, but one that surfaced
+ * to players as a raw, unhandled "internal error" instead of a normal bet result.
+ *
+ * Fix: track the next nonce ourselves in-process instead of asking the RPC each time. Combined
+ * with the queue (so only one write per account is ever in flight), this is fully race-free —
+ * nothing else is allowed to submit a transaction for this account between our reading the
+ * nonce and incrementing it.
+ */
+const accountQueues = new Map<Address, Promise<unknown>>();
+const localNonces = new Map<Address, number>();
+
+async function withExplicitNonce(client: MinimalWalletClient, send: (nonce: number) => Promise<Hex>): Promise<Hex> {
+  const address = client.account!.address;
+  let nonce = localNonces.get(address);
+  if (nonce === undefined) {
+    nonce = await publicClient.getTransactionCount({ address, blockTag: "pending" });
+  }
+  try {
+    const hash = await send(nonce);
+    localNonces.set(address, nonce + 1);
+    return hash;
+  } catch (err) {
+    // Our guess might now be wrong (e.g. this send never actually got broadcast) — drop the
+    // cache so the next attempt re-derives the real nonce from chain state instead of
+    // potentially leaving a permanent gap.
+    localNonces.delete(address);
+    throw err;
+  }
+}
+
+function withAccountQueue<T>(client: MinimalWalletClient, fn: () => Promise<T>): Promise<T> {
+  const address = client.account?.address;
+  if (!address) return fn();
+  const previous = accountQueues.get(address) ?? Promise.resolve();
+  const next = previous.then(fn, fn);
+  // Store a settled-or-not marker so a failed write doesn't permanently wedge the queue for
+  // whoever's next — only the resolution order matters, not the error itself.
+  accountQueues.set(address, next.catch(() => undefined));
+  return next;
 }
 
 /**
@@ -31,32 +86,44 @@ export async function writeWithGasBuffer(
     value?: bigint;
   },
 ): Promise<Hex> {
-  const estimate = await publicClient.estimateContractGas({
-    ...params,
-    account: client.account,
-  } as Parameters<typeof publicClient.estimateContractGas>[0]);
-  return client.writeContract({ ...params, gas: (estimate * 130n) / 100n });
+  return withAccountQueue(client, async () => {
+    const estimate = await publicClient.estimateContractGas({
+      ...params,
+      account: client.account,
+    } as Parameters<typeof publicClient.estimateContractGas>[0]);
+    return withExplicitNonce(client, (nonce) => client.writeContract({ ...params, gas: (estimate * 130n) / 100n, nonce }));
+  });
 }
 
 /**
- * Settling a bet (revealAndResolve) has been observed to actually use ~25 million gas on
- * Monad — two confirmed past successes used 25,099,350 and 25,363,106 gas, despite the
- * contract logic itself being a couple of hashes and a storage write with no loops.
+ * Settling a bet (revealAndResolve) has been observed to use *wildly* different amounts of
+ * gas on Monad depending on what the call actually has to do — checked directly against past
+ * resolved bets' real receipts: as low as 141,450 gas for a quick loss, up into the 12-19
+ * million range for calls that have to run a payout/transfer path, despite the contract logic
+ * itself being a couple of hashes and a storage write with no loops.
  *
- * Worse: Monad's RPC enforces a hard per-transaction gas ceiling at *submission* time that's
+ * Monad's RPC also enforces a hard per-transaction gas ceiling at *submission* time that's
  * lower than its 200M block gas limit and not documented anywhere we could find — confirmed by
  * direct experiment: `eth_call` simulation (e.g. `cast call --gas-limit`) accepts any gas value
  * up to 40M+ with no complaint, since it's a stateless read with no real inclusion, but actually
  * *sending* a transaction with gas=40,000,000 gets rejected outright with "Exceeds transaction
  * gas limit" — a real RPC-node rejection (verified: this exact string doesn't appear anywhere in
  * any installed library, so it's not a client-side check). The ceiling sits somewhere between
- * the proven-working 25,363,106 and the proven-failing 40,000,000 — most likely the common
- * go-ethereum-derived default of 30,000,000. 28M leaves room above the highest observed real
- * cost while staying safely under that likely ceiling. If this value ever starts failing again,
- * the bet is *not* lost (the stake stays collected in the Treasury until a resolve succeeds) —
- * just lower this number further and restart.
+ * the proven-working ~25.4M and the proven-failing 40M — most likely the common
+ * go-ethereum-derived default of 30,000,000.
+ *
+ * A flat 28M for every single call was tried first and works, but it's expensive: confirmed
+ * directly that Monad does *not* refund unused gas the way standard EVM chains do — a resolve
+ * that only needed 141,450 gas, given a 28,000,000 limit, comes back with gasUsed == 28,000,000
+ * on its receipt and is billed for the full amount. Every bit of unnecessary headroom is real
+ * MON burned, every single resolve. So: estimate normally (like every other call here), pad it,
+ * but clamp the result to the proven-safe ceiling instead of ignoring the estimate entirely —
+ * cheap calls stay cheap, and the clamp only kicks in for the rare call that's genuinely close
+ * to the ceiling. If this ever starts failing again, the bet is *not* lost (the stake stays
+ * collected in the Treasury until a resolve succeeds) — just lower the ceiling further and
+ * restart.
  */
-const FLAT_RESOLVE_GAS = 28_000_000n;
+const RESOLVE_GAS_CEILING = 28_000_000n;
 
 export async function writeWithFlatResolveGas(
   client: MinimalWalletClient,
@@ -68,7 +135,25 @@ export async function writeWithFlatResolveGas(
     value?: bigint;
   },
 ): Promise<Hex> {
-  return client.writeContract({ ...params, gas: FLAT_RESOLVE_GAS });
+  return withAccountQueue(client, async () => {
+    const estimate = await publicClient.estimateContractGas({
+      ...params,
+      account: client.account,
+    } as Parameters<typeof publicClient.estimateContractGas>[0]);
+    const padded = (estimate * 130n) / 100n;
+    const gas = padded > RESOLVE_GAS_CEILING ? RESOLVE_GAS_CEILING : padded;
+    return withExplicitNonce(client, (nonce) => client.writeContract({ ...params, gas, nonce }));
+  });
+}
+
+/**
+ * Plain native-MON transfer (no contract call), routed through the same per-account queue +
+ * explicit-nonce machinery as every other send from this wallet — used to actually forward a
+ * win's payout into CustodialVault (see watcher.ts's creditVaultIfWon) so the credit() ledger
+ * entry it then records is backed by real MON, not just a number.
+ */
+export async function sendValueWithQueue(client: MinimalWalletClient, to: Address, value: bigint): Promise<Hex> {
+  return withAccountQueue(client, () => withExplicitNonce(client, (nonce) => client.sendTransaction!({ to, value, nonce })));
 }
 
 /**

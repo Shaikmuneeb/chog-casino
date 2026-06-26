@@ -1,9 +1,9 @@
 import { keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex, type TransactionReceipt } from "viem";
 import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
-import { SINGLE_SHOT_GAME_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
+import { SINGLE_SHOT_GAME_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
-import { config, type GameName } from "./config.js";
-import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded } from "./txSafety.js";
+import { config, NATIVE_TOKEN, type GameName } from "./config.js";
+import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded, sendValueWithQueue } from "./txSafety.js";
 
 /**
  * Watches one single-shot game contract (CoinFlip/Dice/Roulette/Mines/Crash) for BetPlaced
@@ -79,9 +79,17 @@ async function reconcileUnmatched(game: GameName, address: Address, store: SeedS
   console.log(`[watcher:${game}] commitment ${commitment} still unmatched after restart`);
 }
 
-async function reveal(game: GameName, address: Address, betId: bigint, store: SeedStore, commitment: Hex) {
+// Guards against resolving the same bet twice concurrently — placeSingleShotVaultBet calls
+// reveal() directly the instant it confirms a bet on-chain (see export below), and the
+// watchContractEvent subscription below may *also* independently notice the same BetPlaced
+// event and call it again. Both paths are correct on their own; this just stops them racing.
+const inFlightReveals = new Set<string>();
+
+export async function reveal(game: GameName, address: Address, betId: bigint, store: SeedStore, commitment: Hex) {
   const record = store.findByCommitment(commitment);
   if (!record || record.resolved) return;
+  if (inFlightReveals.has(commitment)) return;
+  inFlightReveals.add(commitment);
 
   try {
     const hash = await writeWithFlatResolveGas(walletClient, {
@@ -100,6 +108,8 @@ async function reveal(game: GameName, address: Address, betId: bigint, store: Se
     }
   } catch (err) {
     console.error(`[watcher:${game}] failed to reveal bet ${betId}`, err);
+  } finally {
+    inFlightReveals.delete(commitment);
   }
 }
 
@@ -129,6 +139,26 @@ async function creditVaultIfWon(game: GameName, receipt: TransactionReceipt, rec
     store.markVaultCredited(record.commitment, outcome);
     return;
   }
+
+  // The game contract just paid this win's payout straight to the betting wallet (it was
+  // msg.sender), not to CustodialVault. credit() below only updates the player's *ledger*
+  // balance — it moves no funds on its own (nonpayable). Without this forwarding step, every
+  // win would record a liability the vault never actually holds the MON to cover, silently
+  // making the vault insolvent over time (confirmed directly: totalLiabilities had drifted to
+  // ~103 MON against an actual balance of ~8.7 MON before this fix). So: physically move the
+  // payout from the betting wallet into CustodialVault first, and only record the credit once
+  // that's actually landed on-chain.
+  const isNative = token === NATIVE_TOKEN;
+  const forwardHash = isNative
+    ? await sendValueWithQueue(walletClient, config.custodialVault, payoutAmount)
+    : await writeWithGasBuffer(walletClient, {
+        address: token!,
+        abi: ERC20_ABI as Abi,
+        functionName: "transfer",
+        args: [config.custodialVault, payoutAmount],
+      });
+  const forwardReceipt = await publicClient.waitForTransactionReceipt({ hash: forwardHash });
+  assertTxSucceeded(forwardReceipt, `[watcher:${game}] forward payout to vault for ${record.vaultOwner}`);
 
   const betRef = keccak256(toHex(`${record.commitment}-payout`));
   const hash = await writeWithGasBuffer(vaultWalletClient, {

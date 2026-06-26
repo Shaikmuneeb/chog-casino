@@ -64,6 +64,21 @@ async function pollOne(store: DepositStore, owner: Address, depositAddress: Addr
   }
 }
 
+/** Reads the configured vault's real holding of `token` — native balance for MON, ERC20
+ *  balanceOf otherwise. Used to verify a sweep actually landed before crediting the ledger. */
+async function vaultHolding(token: Address): Promise<bigint> {
+  const vaultAddress = config.custodialVault!;
+  if (token === NATIVE_TOKEN) {
+    return publicClient.getBalance({ address: vaultAddress });
+  }
+  return (await publicClient.readContract({
+    address: token,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [vaultAddress],
+  })) as bigint;
+}
+
 async function sweep(
   store: DepositStore,
   owner: Address,
@@ -74,6 +89,15 @@ async function sweep(
 ) {
   const depositClient = depositAddressClient(index);
   const vaultAddress = config.custodialVault!;
+
+  // Snapshot the vault's real holding before the sweep. We credit the player based on how much
+  // the vault's balance ACTUALLY increased — not on how much we intended to send. This is the
+  // guard that prevents the ledger from ever claiming more than the vault physically received:
+  // if the sweep lands in the wrong contract (e.g. a stale vault address after a migration),
+  // reverts, or moves a different amount than expected, the measured delta reflects reality and
+  // a bad/zero delta is never credited. (This is exactly the failure that previously inflated
+  // the ledger far beyond the vault's real funds.)
+  const vaultBefore = await vaultHolding(token);
 
   let swept: bigint;
   let sweepTxHash: `0x${string}`;
@@ -122,18 +146,37 @@ async function sweep(
     return;
   }
 
+  // Credit only what the vault's real balance actually GAINED, not what we intended to send.
+  const vaultAfter = await vaultHolding(token);
+  const received = vaultAfter - vaultBefore;
+  if (received <= 0n) {
+    // Sweep tx succeeded but the vault's balance didn't go up — funds went somewhere other than
+    // the configured vault (stale address, wrong contract, etc.). Never credit in this case.
+    console.error(
+      `[deposit-watcher] sweep ${sweepTxHash} succeeded but vault holding of ${token} did not increase ` +
+        `(before ${vaultBefore}, after ${vaultAfter}) — NOT crediting ${owner}; manual check required`,
+    );
+    return;
+  }
+  if (received !== swept) {
+    // Defensive: credit the verified on-chain delta, not the assumed amount, and log the mismatch.
+    console.warn(
+      `[deposit-watcher] sweep ${sweepTxHash}: expected to credit ${swept} but vault gained ${received} — crediting the measured amount`,
+    );
+  }
+
   store.addSweep({
     owner,
     depositAddress,
     token,
-    amount: swept.toString(),
+    amount: received.toString(),
     sweepTxHash,
     credited: false,
     createdAt: Date.now(),
   });
-  console.log(`[deposit-watcher] swept ${swept} of ${token} from ${depositAddress} (tx ${sweepTxHash})`);
+  console.log(`[deposit-watcher] swept ${received} of ${token} from ${depositAddress} into vault (tx ${sweepTxHash})`);
 
-  await creditSweep(store, owner, depositAddress, token, swept, sweepTxHash);
+  await creditSweep(store, owner, depositAddress, token, received, sweepTxHash);
 }
 
 async function creditSweep(

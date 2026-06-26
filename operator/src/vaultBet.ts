@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { encodePacked, keccak256, parseEventLogs, toHex, type Abi, type Address, type Hex } from "viem";
 import { publicClient, walletClient, vaultWalletClient, operatorAccount } from "./chain.js";
-import { COINFLIP_ABI, DICE_ABI, ROULETTE_ABI, MINES_ABI, CRASH_ABI, BLACKJACK_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
+import { COINFLIP_ABI, DICE_ABI, ROULETTE_ABI, MINES_ABI, CRASH_ABI, BLACKJACK_ABI, PLINKO_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config, NATIVE_TOKEN, CHOG_ADDRESS, USDC_ADDRESS, type GameName } from "./config.js";
 import { writeWithGasBuffer, assertTxSucceeded as assertTxSucceededRaw } from "./txSafety.js";
+import { reveal } from "./watcher.js";
 
 const SUPPORTED_TOKENS = new Set([NATIVE_TOKEN, CHOG_ADDRESS, USDC_ADDRESS]);
 
@@ -143,11 +144,20 @@ async function placeSingleShotVaultBet(
   store.markMatched(commitment, betRef.toString());
 
   // Bet is live on-chain now — debit the player. If this fails, the bet still resolves
-  // normally (the existing watcher picks it up by commitment regardless), but the player
-  // wasn't charged for it; logged loudly so it can be reconciled by hand rather than silently
-  // giving away a free bet.
+  // normally (reveal() below, or the watcher's own event subscription, picks it up by
+  // commitment regardless), but the player wasn't charged for it; logged loudly so it can be
+  // reconciled by hand rather than silently giving away a free bet.
   const debitRef = keccak256(toHex(`${commitment}-stake`));
   await debitVault(owner, token, amount, debitRef, `[${game}] bet ${betRef} placed for ${owner}`);
+
+  // Trigger resolution directly instead of waiting on the watcher's separate
+  // watchContractEvent subscription to independently notice the same BetPlaced event — that
+  // subscription can occasionally miss an event (RPC polling gap, brief disconnect), leaving a
+  // bet "matched" forever with nothing left to resolve it. We already have everything reveal()
+  // needs right here, synchronously, so there's no reason to depend on a second, less reliable
+  // path for something this critical. Fire-and-forget: the HTTP response below shouldn't block
+  // on the multi-second resolve, the frontend already polls /vault-bet/:game/:betRef/result.
+  void reveal(game, address, betRef, store, commitment);
 
   return { betRef: betRef.toString() };
 }
@@ -170,6 +180,68 @@ export function placeMinesBet(store: SeedStore, owner: Address, token: Address, 
 
 export function placeCrashBet(store: SeedStore, owner: Address, token: Address, amount: bigint, autoCashoutBps: bigint) {
   return placeSingleShotVaultBet(store, "crash", config.games.crash, CRASH_ABI as Abi, owner, token, amount, [autoCashoutBps]);
+}
+
+/**
+ * Plinko vault bet — same pattern as single-shot games but with a `rows` parameter that
+ * must be stored so getVaultBetResult can recompute the on-chain slot.
+ */
+export async function placePlinkoBet(
+  store: SeedStore,
+  owner: Address,
+  token: Address,
+  amount: bigint,
+  rows: number,
+): Promise<{ betRef: string }> {
+  assertVaultConfigured();
+  if (!SUPPORTED_TOKENS.has(token)) throw new VaultBetError("Unsupported token");
+  if (amount <= 0n) throw new VaultBetError("Amount must be greater than zero");
+  const plinkoAddr = config.games.plinko;
+  if (!plinkoAddr) throw new VaultBetError("Plinko contract not configured", 503);
+
+  await assertSufficientVaultBalance(owner, token, amount);
+  await ensureOperatorAllowance(token, amount);
+
+  const serverSeed = toHex(randomBytes(32)) as Hex;
+  const clientSeed = toHex(randomBytes(32)) as Hex;
+  const commitment = keccak256(serverSeed);
+  const userRandomNumber = toHex(randomBytes(32)) as Hex;
+
+  store.add({
+    serverSeed,
+    clientSeed,
+    commitment,
+    game: "plinko",
+    resolved: false,
+    createdAt: Date.now(),
+    vaultOwner: owner,
+    gameParams: String(rows),
+  });
+
+  const hash = await writeWithGasBuffer(walletClient, {
+    address: plinkoAddr,
+    abi: PLINKO_ABI as Abi,
+    functionName: "placeBet",
+    args: [token, amount, rows, userRandomNumber, clientSeed, commitment],
+    value: token === NATIVE_TOKEN ? amount : 0n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  assertTxSucceeded(receipt, `[plinko] placeBet for ${owner}`);
+
+  const [placedLog] = parseEventLogs({ abi: PLINKO_ABI, eventName: "BetPlaced", logs: receipt.logs }) as Array<{
+    args: { betRef?: bigint };
+  }>;
+  if (!placedLog || placedLog.args.betRef === undefined) {
+    throw new VaultBetError("Bet placed on-chain but its betRef could not be read back", 500);
+  }
+  const betRef = placedLog.args.betRef;
+  store.markMatched(commitment, betRef.toString());
+
+  // Debit the player's vault balance after the on-chain bet succeeded
+  const debitRef = keccak256(toHex(`${commitment}-stake`));
+  await debitVault(owner, token, amount, debitRef, `[plinko] bet ${betRef} for ${owner}`);
+
+  return { betRef: betRef.toString() };
 }
 
 type BlackjackRoundTuple = readonly [
@@ -354,6 +426,8 @@ export interface VaultBetResult {
   /** The actual dice roll (0-99), matching Dice.sol's exact formula — present only for
    *  game === "dice". */
   diceRoll?: number;
+  /** The slot the ball landed in (0..rows), present only for game === "plinko". */
+  plinkoSlot?: number;
 }
 
 /** Reproduces BaseGame.sol's `randomNumber = keccak256(abi.encodePacked(serverSeed,
@@ -363,6 +437,15 @@ export interface VaultBetResult {
 function computeRandomNumber(serverSeed: Hex, clientSeed: Hex, betId: string): bigint {
   const packed = encodePacked(["bytes32", "bytes32", "uint256"], [serverSeed, clientSeed, BigInt(betId)]);
   return BigInt(keccak256(packed));
+}
+
+/** Count set bits in the first `n` bits of `value`. Mirrors Plinko.sol's popcount. */
+function popcount(value: bigint, n: number): number {
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    if ((Number(value >> BigInt(i)) & 1) === 1) count++;
+  }
+  return count;
 }
 
 export function getVaultBetResult(store: SeedStore, game: string, betRef: string): VaultBetResult | undefined {
@@ -377,10 +460,14 @@ export function getVaultBetResult(store: SeedStore, game: string, betRef: string
     token: record.vaultOutcome.token,
   };
 
-  if (game === "roulette" || game === "dice") {
+  if (game === "roulette" || game === "dice" || game === "plinko") {
     const randomNumber = computeRandomNumber(record.serverSeed, record.clientSeed, betRef);
     if (game === "roulette") result.rouletteNumber = Number(randomNumber % 37n);
     if (game === "dice") result.diceRoll = Number(randomNumber % 100n);
+    if (game === "plinko") {
+      const rows = Number(record.gameParams ?? 12);
+      result.plinkoSlot = popcount(randomNumber, rows);
+    }
   }
 
   return result;
