@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Volume2, VolumeX } from "lucide-react";
+import { Volume2, VolumeX, Loader2 } from "lucide-react";
 import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
@@ -224,7 +224,7 @@ export default function Aviator() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBetFromVault } = useCrashOnChain();
+  const { placeBetFromVault } = useCrashOnChain();
   const deployed = isDeployed(CONTRACTS.crash) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   useEffect(() => {
@@ -870,13 +870,11 @@ export default function Aviator() {
             >
               {betPlaced
                 ? isReal
-                  ? chainStatus === "approving"
-                    ? "Approving…"
-                    : chainStatus === "committing"
-                    ? "Preparing Bet…"
-                    : chainStatus === "pending"
-                    ? "Placing Bet…"
-                    : "Awaiting Result…"
+                  ? (
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Bet Placed
+                    </span>
+                  )
                   : "Bet Placed"
                 : "Bet"}
             </motion.button>

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Volume2, VolumeX } from "lucide-react";
+import { Volume2, VolumeX, Loader2 } from "lucide-react";
 import { formatUnits } from "viem";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
@@ -30,7 +30,7 @@ function rollDice(): number {
 
 const HOUSE_MULTIPLIER = 99; // 1% house edge
 const QUICK_CHIPS = [1000, 2000, 5000, 10000];
-const MAX_HISTORY = 15;
+
 
 // ── Web Audio: roll rattle + win/lose chime (same pattern as the other games) ──
 let _ctx: AudioContext | null = null;
@@ -110,7 +110,6 @@ export default function Dice() {
   const [displayRoll, setDisplayRoll] = useState(50);
   const [lastRoll, setLastRoll] = useState<number | null>(null);
   const [lastWin, setLastWin] = useState<boolean | null>(null);
-  const [history, setHistory] = useState<{ roll: number; win: boolean }[]>([]);
   const [resultMsg, setResultMsg] = useState<{ text: string; cls: string; id: number } | null>(null);
   const [muted, setMuted] = useState(false);
   const rollIdRef = useRef(0);
@@ -174,7 +173,6 @@ export default function Dice() {
     setResultMsg(null);
     setLastRoll(null);
     setLastWin(null);
-    setHistory([]);
   }, [isReal]);
 
   const clearRollTimers = () => {
@@ -210,7 +208,7 @@ export default function Dice() {
 
     // Flicker animation while waiting for chain
     let ticks = 0;
-    const flickerEvery = 60;
+    const flickerEvery = 40;
     const interval = setInterval(() => {
       setDisplayRoll(rollDice());
       if (ticks % 2 === 0) playRollTick();
@@ -230,7 +228,6 @@ export default function Dice() {
       setLastRoll(roundedResult);
       setLastWin(won);
       setRealPayout(outcome.payoutAmount);
-      setHistory((prev) => [{ roll: roundedResult, win: won }, ...prev].slice(0, MAX_HISTORY));
       const id = ++rollIdRef.current;
       if (won) {
         setResultMsg({
@@ -265,8 +262,8 @@ export default function Dice() {
 
       // Flicker the number for ~0.9s, then settle on the real roll.
       let ticks = 0;
-      const flickerEvery = 60;
-      const totalMs = 900;
+    const flickerEvery = 40;
+    const totalMs = 350;
       const interval = setInterval(() => {
         setDisplayRoll(rollDice());
         if (ticks % 2 === 0) playRollTick();
@@ -279,7 +276,6 @@ export default function Dice() {
         setDisplayRoll(result);
         setLastRoll(result);
         setLastWin(won);
-        setHistory((prev) => [{ roll: result, win: won }, ...prev].slice(0, MAX_HISTORY));
         const id = ++rollIdRef.current;
         if (won) {
           updateBalance((b) => b + payout);
@@ -327,7 +323,7 @@ export default function Dice() {
       }
       remaining--;
       doRollFun(() => {
-        const t = setTimeout(runOne, 600);
+        const t = setTimeout(runOne, 300);
         rollTimersRef.current.push(t);
       });
     };
@@ -388,28 +384,6 @@ export default function Dice() {
   return (
     <GameLayout title="DICE" subtitle="Roll to Win" bgImage={bgImage} accentColor="text-cyan-400">
       <div className="glass rounded-2xl border border-cyan-500/20 overflow-hidden">
-        {/* History strip */}
-        <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-cyan-500/15 overflow-x-auto">
-          <span className="text-[10px] text-purple-300/40 tracking-widest uppercase shrink-0 mr-1">
-            History
-          </span>
-          {history.length === 0 && <span className="text-[10px] text-purple-300/30">No rolls yet</span>}
-          {history.map((h, i) => (
-            <motion.span
-              key={`${h.roll}-${i}`}
-              initial={{ opacity: 0, scale: 0.7 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className={`px-2 py-0.5 rounded-full text-[11px] font-cinzel font-bold border shrink-0 ${
-                h.win
-                  ? "bg-green-500/20 border-green-500/40 text-green-300"
-                  : "bg-red-500/20 border-red-500/40 text-red-300"
-              }`}
-            >
-              {h.roll.toFixed(2)}
-            </motion.span>
-          ))}
-        </div>
-
         {/* Roll display with background image */}
         <div
           className="relative px-4 sm:px-6 py-8 overflow-hidden"
@@ -501,17 +475,10 @@ export default function Dice() {
                     transition={
                       rolling
                         ? { duration: 0.06, ease: "linear" }
-                        : { type: "spring", stiffness: 260, damping: 18 }
+                        : { type: "spring", stiffness: 500, damping: 25 }
                     }
                   >
                     <div className="relative -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
-                      <span
-                        className={`absolute -top-7 font-cinzel font-bold text-xs tabular-nums whitespace-nowrap ${
-                          rolling ? "text-cyan-300" : lastWin ? "text-green-300" : "text-red-300"
-                        }`}
-                      >
-                        {displayRoll.toFixed(2)}
-                      </span>
                       <div
                         className={`w-4 h-4 rounded-full border-2 border-white shadow-[0_0_12px_rgba(255,255,255,0.6)] ${
                           rolling ? "bg-cyan-400" : lastWin ? "bg-green-400" : "bg-red-400"
@@ -779,15 +746,11 @@ export default function Dice() {
               }`}
               data-testid="button-roll-dice"
             >
-              {rolling && isReal
-                ? chainStatus === "approving"
-                  ? "Approving…"
-                  : chainStatus === "committing"
-                  ? "Preparing Bet…"
-                  : chainStatus === "pending"
-                  ? "Placing Bet…"
-                  : "Awaiting Result…"
-                : autoRunning
+              {rolling && isReal ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Rolling…
+                </span>
+              ) : autoRunning
                 ? "Stop Auto"
                 : rolling
                 ? "Rolling…"

@@ -128,7 +128,7 @@ export default function Mines() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBetFromVault } = useMinesOnChain();
+  const { placeBetFromVault } = useMinesOnChain();
   const deployed = isDeployed(CONTRACTS.mines) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   // Real mode bets one tile at a time: Mines.sol resolves a bet atomically with no on-chain
@@ -504,15 +504,7 @@ export default function Mines() {
                 data-testid="button-start-mines"
               >
                 {isReal
-                  ? chainStatus === "approving"
-                    ? "Approving…"
-                    : chainStatus === "committing"
-                    ? "Preparing Bet…"
-                    : chainStatus === "pending"
-                    ? "Placing Bet…"
-                    : chainStatus === "awaiting_result"
-                    ? "Awaiting Result…"
-                    : realBalanceHuman <= 0
+                  ? realBalanceHuman <= 0
                     ? `Out of ${realToken}`
                     : "Bet"
                   : balance <= 0

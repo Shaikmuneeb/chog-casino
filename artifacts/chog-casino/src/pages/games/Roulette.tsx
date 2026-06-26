@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence, useMotionValue, animate as animateValue } from "framer-motion";
 import { formatUnits } from "viem";
+import { Loader2 } from "lucide-react";
 import GameLayout from "@/components/GameLayout";
 import BetControls from "@/components/BetControls";
 import TokenSelector from "@/components/TokenSelector";
@@ -176,7 +177,7 @@ export default function Roulette() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBetFromVault } = useRouletteOnChain();
+  const { placeBetFromVault } = useRouletteOnChain();
   const deployed = isDeployed(CONTRACTS.roulette) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   useEffect(() => {
@@ -244,33 +245,34 @@ export default function Roulette() {
       // a steady, constant speed for as long as the real result takes — when it arrives, we
       // retarget (imperatively, via animateValue called again on the same motion value, which
       // cleanly interrupts the in-flight spin from wherever it actually is) to land on the exact
-      // correct pocket using ONLY the natural leftover distance (0-360°, no extra padding spins
-      // crammed in), with a true ease-OUT curve (starts at full speed, decelerates to a stop).
-      const CONSTANT_SPIN_DEG_PER_SEC = 320;
-      animateValue(rotationMV, rotationMV.get() + CONSTANT_SPIN_DEG_PER_SEC * 8, { duration: 8, ease: "linear" });
+      // correct pocket with a natural deceleration.
+      const CONSTANT_SPIN_DEG_PER_SEC = 600;
+      const spinTarget = rotationMV.get() + CONSTANT_SPIN_DEG_PER_SEC * 4;
+      animateValue(rotationMV, spinTarget, { duration: 4, ease: "linear" });
+      playSpinWhoosh(4);
 
       try {
         const outcome = await placeBetFromVault(realToken, String(realBetAmount), kind, straightNumber);
         const landed = outcome.landedNumber ?? 0;
         const slotIndex = WHEEL_ORDER.indexOf(landed);
 
-        const LANDING_MS = 1200;
+        const LANDING_MS = 800;
         const totalTicks = 10;
         for (let i = 0; i < totalTicks; i++) {
-          const t = LANDING_MS * Math.pow(i / totalTicks, 1.6);
+          const t = LANDING_MS * Math.pow(i / totalTicks, 1.8);
           timersRef.current.push(setTimeout(playTick, t));
         }
 
         const current = rotationMV.get();
         const prevMod = ((current % 360) + 360) % 360;
-        // Segment i sits at angle i*SLOT_ANGLE clockwise from the top (see polar() below).
-        // Rotating the wheel clockwise by R moves that segment to angle i*SLOT_ANGLE + R —
-        // to land it under the fixed pointer (angle 0) we need R = -i*SLOT_ANGLE, not
-        // +i*SLOT_ANGLE (that was the bug: it always landed on the mirror-opposite segment).
         const targetMod = (360 - slotIndex * SLOT_ANGLE) % 360;
         let delta = targetMod - prevMod;
         if (delta <= 0) delta += 360;
-        animateValue(rotationMV, current + delta, { duration: LANDING_MS / 1000, ease: [0, 0, 0.2, 1] });
+        // Always add at least 2 full rotations so the deceleration feels like a natural
+        // wind-down from speed, not a tiny twitch when the chain resolves fast.
+        const MIN_LANDING_SPINS = 2 * 360;
+        const landingDistance = delta + MIN_LANDING_SPINS;
+        animateValue(rotationMV, current + landingDistance, { duration: LANDING_MS / 1000, ease: [0.12, 0, 0.39, 1] });
 
         timersRef.current.push(setTimeout(() => {
           const won = outcome.won;
@@ -292,7 +294,7 @@ export default function Roulette() {
       // Fun mode: outcome known instantly, no waiting phase needed — single decelerating spin.
       updateBalance(b => b - bet);
 
-      const SPIN_MS = 2300;
+      const SPIN_MS = 1000;
       playSpinWhoosh(SPIN_MS / 1000);
       const totalTicks = 28;
       for (let i = 0; i < totalTicks; i++) {
@@ -571,17 +573,13 @@ export default function Roulette() {
               className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.22em] uppercase bg-gradient-to-r from-purple-600 to-purple-800 text-white neon-purple border border-purple-400/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               data-testid="button-spin"
             >
-              {spinning
-                ? isReal
-                  ? chainStatus === "approving"
-                    ? "Approving…"
-                    : chainStatus === "committing"
-                    ? "Preparing Bet…"
-                    : chainStatus === "pending"
-                    ? "Placing Bet…"
-                    : "Spinning…"
-                  : "Spinning…"
-                : `Spin — ${betLabel(betType)}`}
+              {spinning ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Spinning…
+                </span>
+              ) : (
+                `Spin — ${betLabel(betType)}`
+              )}
             </motion.button>
           )}
 

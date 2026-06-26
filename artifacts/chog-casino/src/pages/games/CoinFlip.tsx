@@ -100,7 +100,7 @@ export default function CoinFlip() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { status: chainStatus, placeBetFromVault } = useCoinFlipOnChain();
+  const { placeBetFromVault } = useCoinFlipOnChain();
   const deployed = isDeployed(CONTRACTS.coinFlip) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   // Real-mode balance is the player's CustodialVault (in-game) balance, not their wallet's —
@@ -390,15 +390,7 @@ export default function CoinFlip() {
                   transition={{ duration: 0.7, repeat: Infinity }}
                   className="font-cinzel text-sm tracking-[0.3em] text-yellow-400/70 uppercase"
                 >
-                  {isReal
-                    ? chainStatus === "approving"
-                      ? "Approving…"
-                      : chainStatus === "committing"
-                      ? "Preparing Bet…"
-                      : chainStatus === "pending"
-                      ? "Placing Bet…"
-                      : "Awaiting Result…"
-                    : "Flipping…"}
+                  Flipping…
                 </motion.div>
               )}
             </AnimatePresence>
