@@ -272,7 +272,13 @@ export default function Roulette() {
         // wind-down from speed, not a tiny twitch when the chain resolves fast.
         const MIN_LANDING_SPINS = 2 * 360;
         const landingDistance = delta + MIN_LANDING_SPINS;
-        animateValue(rotationMV, current + landingDistance, { duration: LANDING_MS / 1000, ease: [0.12, 0, 0.39, 1] });
+        // [0.12, 0, 0.39, 1]'s initial slope works out to 0/0.12 = 0 — i.e. this curve starts at
+        // ZERO velocity. Retargeting onto it from the continuous 600deg/sec spin therefore made
+        // the wheel visibly freeze for an instant before "waking up" into the landing curve, on
+        // every single spin — a real, reproducible stutter, not just a vague smoothness
+        // complaint. [0.16, 1, 0.3, 1]'s initial slope is 1/0.16 = 6.25 — high, so the landing
+        // continues the spin's momentum and decelerates smoothly into the stop instead.
+        animateValue(rotationMV, current + landingDistance, { duration: LANDING_MS / 1000, ease: [0.16, 1, 0.3, 1] });
 
         timersRef.current.push(setTimeout(() => {
           const won = outcome.won;

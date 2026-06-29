@@ -4,7 +4,7 @@ import { publicClient, walletClient, vaultWalletClient, operatorAccount } from "
 import { COINFLIP_ABI, DICE_ABI, ROULETTE_ABI, MINES_ABI, CRASH_ABI, BLACKJACK_ABI, PLINKO_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config, NATIVE_TOKEN, CHOG_ADDRESS, USDC_ADDRESS, type GameName } from "./config.js";
-import { writeWithGasBuffer, assertTxSucceeded as assertTxSucceededRaw } from "./txSafety.js";
+import { writeWithGasBuffer, assertTxSucceeded as assertTxSucceededRaw, withRevertRetry } from "./txSafety.js";
 import { reveal } from "./watcher.js";
 
 const SUPPORTED_TOKENS = new Set([NATIVE_TOKEN, CHOG_ADDRESS, USDC_ADDRESS]);
@@ -56,6 +56,24 @@ async function ensureOperatorAllowance(token: Address, amount: bigint) {
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     assertTxSucceeded(receipt, `[allowance] operator approve for ${token}`);
+
+    // Confirmed directly: the very first bet placed right after a fresh approve can still fail
+    // — placeBet's own gas estimation (an eth_call-style read, same as this allowance check) can
+    // land on a different node in Monad's load-balanced public RPC pool that hasn't yet caught up
+    // to the approve tx this same client just confirmed against. Re-poll allowance here (cheap,
+    // read-only) until it actually reflects the approval before handing control back to placeBet
+    // — closes exactly the gap that produced several real "internal error" bet failures in a row
+    // immediately after a player's first-ever CHOG/USDC bet.
+    for (let i = 0; i < 6; i++) {
+      const fresh = (await publicClient.readContract({
+        address: token,
+        abi: ERC20_ABI,
+        functionName: "allowance",
+        args: [operatorAccount.address, config.treasury],
+      })) as bigint;
+      if (fresh >= amount) return;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   }
 }
 
@@ -124,15 +142,18 @@ async function placeSingleShotVaultBet(
     vaultOwner: owner,
   });
 
-  const hash = await writeWithGasBuffer(walletClient, {
-    address,
-    abi,
-    functionName: "placeBet",
-    args: [token, amount, ...extraArgs, userRandomNumber, clientSeed, commitment],
-    value: token === NATIVE_TOKEN ? amount : 0n,
+  const receipt = await withRevertRetry(`${game} placeBet`, async () => {
+    const hash = await writeWithGasBuffer(walletClient, {
+      address,
+      abi,
+      functionName: "placeBet",
+      args: [token, amount, ...extraArgs, userRandomNumber, clientSeed, commitment],
+      value: token === NATIVE_TOKEN ? amount : 0n,
+    });
+    const r = await publicClient.waitForTransactionReceipt({ hash });
+    assertTxSucceeded(r, `[${game}] placeBet for ${owner}`);
+    return r;
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  assertTxSucceeded(receipt, `[${game}] placeBet for ${owner}`);
 
   const [placedLog] = parseEventLogs({ abi, eventName: "BetPlaced", logs: receipt.logs }) as Array<{
     args: { betRef?: bigint };
@@ -143,12 +164,16 @@ async function placeSingleShotVaultBet(
   const betRef = placedLog.args.betRef;
   store.markMatched(commitment, betRef.toString());
 
-  // Bet is live on-chain now — debit the player. If this fails, the bet still resolves
-  // normally (reveal() below, or the watcher's own event subscription, picks it up by
-  // commitment regardless), but the player wasn't charged for it; logged loudly so it can be
-  // reconciled by hand rather than silently giving away a free bet.
+  // Bet is live on-chain now — debit the player. Fire-and-forget like reveal() below: debitVault
+  // already catches and logs its own failures internally (never throws), so awaiting it here only
+  // adds a second full on-chain confirmation's worth of latency to the HTTP response for no
+  // benefit — the frontend's next step is polling /result, which doesn't depend on the debit
+  // having landed yet. On-chain ordering is still guaranteed correct regardless: debitVault and
+  // reveal()'s eventual credit() both go through the same per-account nonce queue in txSafety.ts,
+  // so the debit's tx always gets an earlier nonce than any credit from this same flow, even
+  // though neither is awaited here.
   const debitRef = keccak256(toHex(`${commitment}-stake`));
-  await debitVault(owner, token, amount, debitRef, `[${game}] bet ${betRef} placed for ${owner}`);
+  void debitVault(owner, token, amount, debitRef, `[${game}] bet ${betRef} placed for ${owner}`);
 
   // Trigger resolution directly instead of waiting on the watcher's separate
   // watchContractEvent subscription to independently notice the same BetPlaced event — that
@@ -218,15 +243,18 @@ export async function placePlinkoBet(
     gameParams: String(rows),
   });
 
-  const hash = await writeWithGasBuffer(walletClient, {
-    address: plinkoAddr,
-    abi: PLINKO_ABI as Abi,
-    functionName: "placeBet",
-    args: [token, amount, rows, userRandomNumber, clientSeed, commitment],
-    value: token === NATIVE_TOKEN ? amount : 0n,
+  const receipt = await withRevertRetry("plinko placeBet", async () => {
+    const hash = await writeWithGasBuffer(walletClient, {
+      address: plinkoAddr,
+      abi: PLINKO_ABI as Abi,
+      functionName: "placeBet",
+      args: [token, amount, rows, userRandomNumber, clientSeed, commitment],
+      value: token === NATIVE_TOKEN ? amount : 0n,
+    });
+    const r = await publicClient.waitForTransactionReceipt({ hash });
+    assertTxSucceeded(r, `[plinko] placeBet for ${owner}`);
+    return r;
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  assertTxSucceeded(receipt, `[plinko] placeBet for ${owner}`);
 
   const [placedLog] = parseEventLogs({ abi: PLINKO_ABI, eventName: "BetPlaced", logs: receipt.logs }) as Array<{
     args: { betRef?: bigint };
@@ -314,15 +342,18 @@ export async function placeBlackjackBet(
     vaultOwner: owner,
   });
 
-  const hash = await writeWithGasBuffer(walletClient, {
-    address: config.blackjack,
-    abi: BLACKJACK_ABI as Abi,
-    functionName: "placeBet",
-    args: [token, amount, clientSeed, commitment],
-    value: token === NATIVE_TOKEN ? amount : 0n,
+  const receipt = await withRevertRetry("blackjack placeBet", async () => {
+    const hash = await writeWithGasBuffer(walletClient, {
+      address: config.blackjack,
+      abi: BLACKJACK_ABI as Abi,
+      functionName: "placeBet",
+      args: [token, amount, clientSeed, commitment],
+      value: token === NATIVE_TOKEN ? amount : 0n,
+    });
+    const r = await publicClient.waitForTransactionReceipt({ hash });
+    assertTxSucceeded(r, `[blackjack] placeBet for ${owner}`);
+    return r;
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  assertTxSucceeded(receipt, `[blackjack] placeBet for ${owner}`);
 
   const [openedLog] = parseEventLogs({ abi: BLACKJACK_ABI, eventName: "RoundOpened", logs: receipt.logs }) as Array<{
     args: { roundId?: bigint };

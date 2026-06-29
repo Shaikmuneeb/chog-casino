@@ -3,7 +3,7 @@ import { publicClient, walletClient, vaultWalletClient } from "./chain.js";
 import { SINGLE_SHOT_GAME_ABI, CUSTODIAL_VAULT_ABI, ERC20_ABI } from "./abi.js";
 import { SeedStore, type SeedRecord } from "./store.js";
 import { config, NATIVE_TOKEN, type GameName } from "./config.js";
-import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded, sendValueWithQueue } from "./txSafety.js";
+import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded, sendValueWithQueue, classifyAndMaybeRestart } from "./txSafety.js";
 
 /**
  * Watches one single-shot game contract (CoinFlip/Dice/Roulette/Mines/Crash) for BetPlaced
@@ -11,10 +11,9 @@ import { writeWithGasBuffer, writeWithFlatResolveGas, assertTxSucceeded, sendVal
  * calls revealAndResolve — there's no player decision after placeBet for these games, so the
  * round can be settled the instant it's on-chain.
  */
-export function watchSingleShotGame(game: GameName, address: Address, store: SeedStore) {
-  console.log(`[watcher:${game}] watching ${address}`);
-
-  publicClient.watchContractEvent({
+function startEventSubscription(game: GameName, address: Address, store: SeedStore) {
+  const label = `watcher:${game}`;
+  let unwatch = publicClient.watchContractEvent({
     address,
     abi: SINGLE_SHOT_GAME_ABI,
     eventName: "BetPlaced",
@@ -25,33 +24,68 @@ export function watchSingleShotGame(game: GameName, address: Address, store: See
         await handleBetPlaced(game, address, betRef, store);
       }
     },
-    onError: (err) => console.error(`[watcher:${game}] event subscription error`, err),
+    onError: (err) =>
+      classifyAndMaybeRestart(
+        label,
+        err,
+        () => {
+          unwatch = startEventSubscription(game, address, store);
+        },
+        () => unwatch(),
+      ),
   });
+  return unwatch;
+}
+
+export function watchSingleShotGame(game: GameName, address: Address, store: SeedStore) {
+  console.log(`[watcher:${game}] watching ${address}`);
+  startEventSubscription(game, address, store);
 
   // On startup, resolve any unmatched commitment whose bet may have landed while we were down.
+  // Each of these is fire-and-forget by design (the watcher must keep booting the other games
+  // regardless), so a rejection here MUST be caught locally — left unhandled, it crashes the
+  // entire Node process and takes down every other game's watcher with it (confirmed: a single
+  // stuck vault-credit record, e.g. one whose forward payout can't land because the betting
+  // wallet is temporarily short of funds, repeatedly killed the whole operator on every restart).
   for (const record of store.unmatched()) {
     if (record.game !== game) continue;
-    void reconcileUnmatched(game, address, store, record.commitment);
+    reconcileUnmatched(game, address, store, record.commitment).catch((err) =>
+      console.error(`[watcher:${game}] failed to reconcile unmatched commitment ${record.commitment}`, err),
+    );
   }
   for (const record of store.pendingReveals()) {
     if (record.game !== game) continue;
-    void reveal(game, address, BigInt(record.betRef!), store, record.commitment);
+    reveal(game, address, BigInt(record.betRef!), store, record.commitment).catch((err) =>
+      console.error(`[watcher:${game}] failed to resume pending reveal for ${record.commitment}`, err),
+    );
   }
   for (const record of store.pendingVaultCredits()) {
     if (record.game !== game) continue;
-    void resumeVaultCredit(game, record, store);
+    resumeVaultCredit(game, record, store).catch((err) =>
+      console.error(`[watcher:${game}] failed to resume vault credit for ${record.commitment}`, err),
+    );
   }
 }
 
-/** Resumes a vault credit that never completed before a restart, by re-fetching the exact
- *  revealAndResolve receipt (recorded as resolveTxHash) instead of scanning chain history. */
+/** Resumes a vault credit that never completed before a restart. record.vaultOutcome is normally
+ *  already set (markResolved sets it the instant the outcome is decoded — see reveal() below);
+ *  only re-decode from the receipt as a fallback for records resolved before that field existed. */
 async function resumeVaultCredit(game: GameName, record: SeedRecord, store: SeedStore) {
-  if (!record.resolveTxHash) {
-    console.error(`[watcher:${game}] commitment ${record.commitment} has no resolveTxHash — cannot resume vault credit, manual check required`);
-    return;
+  if (!record.vaultOwner) return;
+  let outcome = record.vaultOutcome;
+  if (!outcome) {
+    if (!record.resolveTxHash) {
+      console.error(`[watcher:${game}] commitment ${record.commitment} has no resolveTxHash — cannot resume vault credit, manual check required`);
+      return;
+    }
+    const receipt = await publicClient.getTransactionReceipt({ hash: record.resolveTxHash });
+    outcome = decodeOutcome(receipt);
+    if (!outcome) {
+      console.error(`[watcher:${game}] could not find BetResolved log to resume vault credit for ${record.commitment}`);
+      return;
+    }
   }
-  const receipt = await publicClient.getTransactionReceipt({ hash: record.resolveTxHash });
-  await creditVaultIfWon(game, receipt, record, store);
+  await creditVaultIfWon(game, record.vaultOwner, record.commitment, outcome, store);
 }
 
 async function handleBetPlaced(game: GameName, address: Address, betId: bigint, store: SeedStore) {
@@ -100,11 +134,15 @@ export async function reveal(game: GameName, address: Address, betId: bigint, st
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     assertTxSucceeded(receipt, `[watcher:${game}] revealAndResolve for bet ${betId}`);
-    store.markResolved(commitment, hash);
+
+    // Decode win/loss/payout from this SAME receipt, right now — this is everything the player
+    // needs to see a result, and it's already fully decided on-chain at this exact point.
+    const outcome = record.vaultOwner ? decodeOutcome(receipt) : undefined;
+    store.markResolved(commitment, hash, outcome);
     console.log(`[watcher:${game}] resolved bet ${betId} (tx ${hash})`);
 
-    if (record.vaultOwner) {
-      await creditVaultIfWon(game, receipt, record, store);
+    if (record.vaultOwner && outcome) {
+      await creditVaultIfWon(game, record.vaultOwner, commitment, outcome, store);
     }
   } catch (err) {
     console.error(`[watcher:${game}] failed to reveal bet ${betId}`, err);
@@ -113,30 +151,46 @@ export async function reveal(game: GameName, address: Address, betId: bigint, st
   }
 }
 
+/** Decodes win/loss/payout from a revealAndResolve receipt's own BetResolved event. This is
+ *  everything the player needs to see a result — kept separate from creditVaultIfWon so it can
+ *  run (and get stored via markResolved) the INSTANT resolution confirms, not after the slower
+ *  forward+credit bookkeeping below also finishes. */
+function decodeOutcome(receipt: TransactionReceipt): { won: boolean; payoutAmount: string; token: Address } | undefined {
+  const [resolvedLog] = parseEventLogs({ abi: SINGLE_SHOT_GAME_ABI, eventName: "BetResolved", logs: receipt.logs });
+  if (!resolvedLog) return undefined;
+  const { token, payoutAmount, won } = resolvedLog.args;
+  return { won: !!won, payoutAmount: (payoutAmount ?? 0n).toString(), token: token! };
+}
+
 /**
- * For instant vault-funded bets only (record.vaultOwner is set): the operator's own wallet was
- * msg.sender on placeBet, so the contract just paid US, not the real player. Read the actual
- * outcome from the BetResolved event this same tx emitted, and if it won, credit the payout
- * back to the real player's CustodialVault balance. On a loss, nothing happens — their stake
- * was already debited at bet-placement time (see server.ts's /vault-bet routes).
+ * For instant vault-funded bets only: the operator's own wallet was msg.sender on placeBet, so
+ * the contract just paid US, not the real player, on a win. Forward that payout into
+ * CustodialVault and credit the player's ledger balance to match. On a loss, nothing to move —
+ * their stake was already debited at bet-placement time (see server.ts's /vault-bet routes).
+ *
+ * Deliberately NOT on the path the frontend waits on: by the time this runs, markResolved has
+ * already recorded the outcome (see reveal() above) and GET /vault-bet/:game/:betRef/result is
+ * already answering with the real win/loss/payout. This function is pure backend reconciliation
+ * — making sure the vault's ledger and its actual on-chain balance agree — and was previously
+ * (wrongly) gating the player-visible result behind two extra sequential transactions.
  */
-async function creditVaultIfWon(game: GameName, receipt: TransactionReceipt, record: SeedRecord, store: SeedStore) {
+async function creditVaultIfWon(
+  game: GameName,
+  vaultOwner: Address,
+  commitment: Hex,
+  outcome: { won: boolean; payoutAmount: string; token: Address },
+  store: SeedStore,
+) {
   if (!vaultWalletClient || !config.custodialVault) {
     console.error(`[watcher:${game}] vault-funded bet resolved but vault operator isn't configured — cannot credit`);
     return;
   }
 
-  const [resolvedLog] = parseEventLogs({ abi: SINGLE_SHOT_GAME_ABI, eventName: "BetResolved", logs: receipt.logs });
-  if (!resolvedLog) {
-    console.error(`[watcher:${game}] could not find BetResolved log to credit vault for ${record.commitment}`);
-    return;
-  }
+  const { token, won } = outcome;
+  const payoutAmount = BigInt(outcome.payoutAmount);
 
-  const { token, payoutAmount, won } = resolvedLog.args;
-  const outcome = { won: !!won, payoutAmount: (payoutAmount ?? 0n).toString(), token: token! };
-
-  if (!won || !payoutAmount || payoutAmount === 0n) {
-    store.markVaultCredited(record.commitment, outcome);
+  if (!won || payoutAmount === 0n) {
+    store.markVaultCredited(commitment);
     return;
   }
 
@@ -152,25 +206,25 @@ async function creditVaultIfWon(game: GameName, receipt: TransactionReceipt, rec
   const forwardHash = isNative
     ? await sendValueWithQueue(walletClient, config.custodialVault, payoutAmount)
     : await writeWithGasBuffer(walletClient, {
-        address: token!,
+        address: token,
         abi: ERC20_ABI as Abi,
         functionName: "transfer",
         args: [config.custodialVault, payoutAmount],
       });
   const forwardReceipt = await publicClient.waitForTransactionReceipt({ hash: forwardHash });
-  assertTxSucceeded(forwardReceipt, `[watcher:${game}] forward payout to vault for ${record.vaultOwner}`);
+  assertTxSucceeded(forwardReceipt, `[watcher:${game}] forward payout to vault for ${vaultOwner}`);
 
-  const betRef = keccak256(toHex(`${record.commitment}-payout`));
+  const betRef = keccak256(toHex(`${commitment}-payout`));
   const hash = await writeWithGasBuffer(vaultWalletClient, {
     address: config.custodialVault,
     abi: CUSTODIAL_VAULT_ABI as Abi,
     functionName: "credit",
-    args: [record.vaultOwner!, token, payoutAmount, betRef],
+    args: [vaultOwner, token, payoutAmount, betRef],
   });
   const creditReceipt = await publicClient.waitForTransactionReceipt({ hash });
-  assertTxSucceeded(creditReceipt, `[watcher:${game}] credit payout for ${record.vaultOwner}`);
-  store.markVaultCredited(record.commitment, outcome);
-  console.log(`[watcher:${game}] credited vault-funded win: ${record.vaultOwner} +${payoutAmount} of ${token}`);
+  assertTxSucceeded(creditReceipt, `[watcher:${game}] credit payout for ${vaultOwner}`);
+  store.markVaultCredited(commitment);
+  console.log(`[watcher:${game}] credited vault-funded win: ${vaultOwner} +${payoutAmount} of ${token}`);
 }
 
 export function watchAllSingleShotGames(store: SeedStore) {

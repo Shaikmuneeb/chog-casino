@@ -8,6 +8,7 @@ import {Dice} from "../src/Dice.sol";
 import {Roulette} from "../src/Roulette.sol";
 import {Mines} from "../src/Mines.sol";
 import {Crash} from "../src/Crash.sol";
+import {Plinko} from "../src/Plinko.sol";
 
 /// @notice Deploys the full casino stack to Monad mainnet (chain id 41454) in the order
 /// specified by the spec: Treasury first, then each game, then grant GAME_ROLE per game.
@@ -37,12 +38,14 @@ contract Deploy is Script {
         Roulette roulette = new Roulette(address(treasury), admin);
         Mines mines = new Mines(address(treasury), admin);
         Crash crash = new Crash(address(treasury), admin);
+        Plinko plinko = new Plinko(address(treasury), admin);
 
         console2.log("CoinFlip deployed at", address(coinFlip));
         console2.log("Dice deployed at", address(dice));
         console2.log("Roulette deployed at", address(roulette));
         console2.log("Mines deployed at", address(mines));
         console2.log("Crash deployed at", address(crash));
+        console2.log("Plinko deployed at", address(plinko));
 
         bytes32 gameRole = treasury.GAME_ROLE();
         treasury.grantRole(gameRole, address(coinFlip));
@@ -50,6 +53,7 @@ contract Deploy is Script {
         treasury.grantRole(gameRole, address(roulette));
         treasury.grantRole(gameRole, address(mines));
         treasury.grantRole(gameRole, address(crash));
+        treasury.grantRole(gameRole, address(plinko));
 
         vm.stopBroadcast();
 

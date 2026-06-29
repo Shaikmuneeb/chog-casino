@@ -12,6 +12,7 @@ import {
   placeRouletteBet,
   placeMinesBet,
   placeCrashBet,
+  placePlinkoBet,
   placeBlackjackBet,
   blackjackHit,
   blackjackStand,
@@ -193,6 +194,26 @@ export function startServer(store: SeedStore, depositStore: DepositStore) {
     } catch (err) {
       if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
       console.error("[server] /vault-bet/crash/place failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.post("/vault-bet/plinko/place", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const rows = req.body?.rows as number | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (rows === undefined || rows < 8 || rows > 16) return res.status(400).json({ error: "rows must be 8-16" });
+
+      const result = await placePlinkoBet(store, owner as Address, token as Address, BigInt(amountWei), rows);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultBetError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-bet/plinko/place failed", err);
       res.status(500).json({ error: "internal error" });
     }
   });

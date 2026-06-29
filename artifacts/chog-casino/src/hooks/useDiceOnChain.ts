@@ -10,6 +10,7 @@ import {
   type SupportedToken,
 } from "@/config/contracts";
 import { postVaultBet, pollVaultBetResult } from "@/lib/vaultBet";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
@@ -53,7 +54,7 @@ export interface DiceOutcome {
 }
 
 async function requestCommitment(): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
-  const res = await fetch(`${OPERATOR_BASE_URL}/commit`, {
+  const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ game: "dice" }),

@@ -1,6 +1,35 @@
 import type { Abi, Address, Hex, TransactionReceipt } from "viem";
 import { publicClient } from "./chain.js";
 
+/**
+ * viem's watchContractEvent tracks its own fromBlock/toBlock cursor internally and never resets
+ * it after a failed poll — confirmed directly: once a single eth_getLogs call fails for any
+ * reason (a brief RPC indexing-lag blip right at boot was enough), fromBlock freezes at that
+ * point forever while toBlock keeps growing on every subsequent poll, so the range only ever
+ * gets WIDER and every future poll fails too ("eth_getLogs is limited to a 100 range") — a
+ * permanent stuck state that not even restarting the whole operator reliably escapes, since the
+ * same indexing-lag blip can recur at the next boot. The only way out is to tear down the stuck
+ * subscription and start a fresh one, which resets viem's cursor to begin again from "latest".
+ */
+/**
+ * `start` should call publicClient.watchContractEvent(...) inline (kept at the call site, not
+ * routed through this helper) so TypeScript can fully infer the abi/eventName-specific log
+ * shape for onLogs — threading the params through a generic wrapper instead collapses that
+ * inference to the untyped base `Log` type. This helper only owns the error-classification and
+ * restart-on-stuck-cursor behavior; `start`'s own onError must call the `onStuckCursor` callback
+ * it's given whenever it detects the unrecoverable range error, and this helper handles tearing
+ * down and restarting the subscription from there.
+ */
+export function classifyAndMaybeRestart(label: string, err: Error, restart: () => void, unwatch: () => void): void {
+  console.error(`[${label}] event subscription error`, err);
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("limited to a 100 range") || message.includes("Invalid params")) {
+    console.error(`[${label}] subscription cursor stuck — restarting it fresh`);
+    unwatch();
+    setTimeout(restart, 2000);
+  }
+}
+
 interface MinimalWalletClient {
   account: { address: Address } | undefined;
   writeContract: (args: {
@@ -12,7 +41,7 @@ interface MinimalWalletClient {
     gas?: bigint;
     nonce?: number;
   }) => Promise<Hex>;
-  sendTransaction?: (args: { to: Address; value: bigint; nonce?: number }) => Promise<Hex>;
+  sendTransaction?: (args: { to: Address; value: bigint; nonce?: number; gas?: bigint }) => Promise<Hex>;
 }
 
 /**
@@ -70,11 +99,18 @@ function withAccountQueue<T>(client: MinimalWalletClient, fn: () => Promise<T>):
 
 /**
  * viem's writeContract auto-estimates gas with zero safety margin when no `gas` override is
- * given. On Monad that estimate has been observed to land exactly at the gas actually used —
- * i.e. with no margin for any variance between estimation time and inclusion time — so the
- * transaction runs out of gas mid-execution and reverts (visible as gasUsed === gasLimit on the
- * receipt). Re-estimating ourselves and padding it fixes that without guessing a flat number
- * that might be wrong for a different contract call's gas cost.
+ * given; padding it gives a small cushion against estimate-vs-inclusion-time state drift.
+ *
+ * IMPORTANT: on Monad, a transaction's receipt reports gasUsed === gasLimit on EVERY
+ * transaction, success or failure alike (confirmed directly: a successful CoinFlip.placeBet
+ * receipt showed gasUsed exactly equal to its gasLimit, same as failed ones) — this chain
+ * apparently doesn't report a gas refund/remainder at all. That means "gasUsed === gasLimit" is
+ * NOT a usable signal for "this failed because it ran out of gas" here, unlike on most other
+ * EVM chains. A previous version of this function chased that false signal by repeatedly raising
+ * the gas margin (up to a flat 1.5M floor) — which did nothing to fix the real (non-gas) revert
+ * cause, while making every failed attempt burn far more real MON in fees than necessary. Kept
+ * at a modest 30% pad; if a genuine gas-estimation gap is ever found, diagnose it via
+ * debug_traceTransaction's actual revert reason, not via gasUsed/gasLimit comparison.
  */
 export async function writeWithGasBuffer(
   client: MinimalWalletClient,
@@ -153,7 +189,48 @@ export async function writeWithFlatResolveGas(
  * entry it then records is backed by real MON, not just a number.
  */
 export async function sendValueWithQueue(client: MinimalWalletClient, to: Address, value: bigint): Promise<Hex> {
-  return withAccountQueue(client, () => withExplicitNonce(client, (nonce) => client.sendTransaction!({ to, value, nonce })));
+  return withAccountQueue(client, async () => {
+    // `to` here is frequently a CONTRACT (e.g. CustodialVault), whose receive() actually runs
+    // code — that costs more than a plain EOA-to-EOA transfer's flat 21000, so estimate for real
+    // rather than relying on viem's bare-transfer default. NOTE: a reverted send here that looked
+    // like "out of gas" (gasUsed == gasLimit) turned out, on investigation, to actually be a
+    // genuine insufficient-balance failure (the wallet held less MON than the value being sent) —
+    // Monad's receipts report gasUsed == gasLimit on every transaction regardless of outcome, so
+    // that comparison is not a usable signal here for "ran out of gas" vs. any other revert
+    // reason. Don't escalate this margin again without confirming via debug_traceTransaction
+    // first; a bigger gas limit makes every failed attempt (for whatever the real reason is)
+    // burn more real MON in fees without fixing anything.
+    const estimate = await publicClient.estimateGas({ account: client.account, to, value } as Parameters<typeof publicClient.estimateGas>[0]);
+    return withExplicitNonce(client, (nonce) => client.sendTransaction!({ to, value, nonce, gas: (estimate * 130n) / 100n }));
+  });
+}
+
+/**
+ * Retries a full send-and-confirm cycle (not just the send) when it reverts on-chain. Confirmed
+ * directly: a placeBet call that reverted on real inclusion replayed *successfully* moments
+ * later via a full historical re-execution (`cast run`, which replays every preceding
+ * transaction in the same block to reconstruct exact state) — using a small fraction of the gas
+ * available, with the failed trace showing zero internal sub-calls at all. That combination (an
+ * identical call succeeding when replayed serially, but failing with no Solidity-level revert
+ * reason when actually included) doesn't look like a logic bug in our contracts; it's consistent
+ * with Monad's parallel-execution layer detecting a conflict with another transaction landing in
+ * the same block and aborting ours before EVM execution even begins. Retrying — which lands in a
+ * different block with different neighboring transactions — is the practical mitigation until/
+ * unless a clearer cause turns up. `attempt` should perform the entire send + wait + assert
+ * cycle itself so each retry gets a fresh nonce and a fresh chance at an uncontested block.
+ */
+export async function withRevertRetry<T>(label: string, attempt: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await attempt();
+    } catch (err) {
+      lastErr = err;
+      console.error(`[${label}] attempt ${i + 1}/${maxAttempts} failed`, err);
+      if (i < maxAttempts - 1) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+  throw lastErr;
 }
 
 /**

@@ -26,6 +26,8 @@ export interface SeedRecord {
   /** Decoded outcome of a vault-funded bet, recorded once resolved — lets GET
    *  /vault-bet/:game/:betRef/result answer without re-decoding the chain on every poll. */
   vaultOutcome?: { won: boolean; payoutAmount: string; token: Address };
+  /** Arbitrary game parameters needed to compute outcomes client-side (e.g. Plinko rows). */
+  gameParams?: string;
 }
 
 /**
@@ -75,11 +77,18 @@ export class SeedStore {
     this.flush();
   }
 
-  markResolved(commitment: Hex, resolveTxHash?: Hex) {
+  markResolved(commitment: Hex, resolveTxHash?: Hex, outcome?: SeedRecord["vaultOutcome"]) {
     const record = this.findByCommitment(commitment);
     if (!record) return;
     record.resolved = true;
     if (resolveTxHash) record.resolveTxHash = resolveTxHash;
+    // Set as soon as the outcome is KNOWN (decoded from revealAndResolve's own BetResolved
+    // event), not later when the vault forward+credit bookkeeping happens to finish — GET
+    // /vault-bet/:game/:betRef/result keys off this field, so setting it here is what lets the
+    // frontend show a result the instant the chain has actually decided it, instead of also
+    // waiting through two more sequential transactions (forward payout, then credit ledger) that
+    // are pure backend reconciliation the player doesn't need to wait on.
+    if (outcome) record.vaultOutcome = outcome;
     this.flush();
   }
 

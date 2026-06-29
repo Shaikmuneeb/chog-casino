@@ -20,6 +20,7 @@ export const config = {
     roulette: required("ROULETTE_ADDRESS") as Address,
     mines: required("MINES_ADDRESS") as Address,
     crash: required("CRASH_ADDRESS") as Address,
+    plinko: process.env.PLINKO_ADDRESS as Address | undefined,
   },
   blackjack: required("BLACKJACK_ADDRESS") as Address,
 

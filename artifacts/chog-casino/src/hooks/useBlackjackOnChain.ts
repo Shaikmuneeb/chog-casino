@@ -10,6 +10,7 @@ import {
   type SupportedToken,
 } from "@/config/contracts";
 import { postVaultBet, postVaultBetAction, pollVaultBetResult } from "@/lib/vaultBet";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
@@ -93,7 +94,7 @@ export interface LiveCards {
 }
 
 async function requestCommitment(): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
-  const res = await fetch(`${OPERATOR_BASE_URL}/commit`, {
+  const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ game: "blackjack" }),
@@ -110,7 +111,7 @@ export function useBlackjackOnChain() {
   const [status, setStatus] = useState<OnChainBetStatus>("idle");
 
   const fetchLiveCards = useCallback(async (roundId: bigint): Promise<LiveCards> => {
-    const res = await fetch(`${OPERATOR_BASE_URL}/blackjack/${roundId}/cards`);
+    const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/blackjack/${roundId}/cards`);
     if (!res.ok) throw new Error(`Could not fetch live cards (${res.status})`);
     return res.json();
   }, []);

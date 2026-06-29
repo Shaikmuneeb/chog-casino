@@ -14,7 +14,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 export type OnChainBetStatus = "idle" | "approving" | "committing" | "pending" | "awaiting_result";
 
-const COIN_FLIP_ABI = [
+const PLINKO_ABI = [
   {
     type: "function",
     name: "placeBet",
@@ -22,12 +22,22 @@ const COIN_FLIP_ABI = [
     inputs: [
       { name: "token", type: "address" },
       { name: "amount", type: "uint256" },
-      { name: "wantsHeads", type: "bool" },
+      { name: "rows", type: "uint8" },
       { name: "userRandomNumber", type: "bytes32" },
       { name: "clientSeed", type: "bytes32" },
       { name: "serverSeedCommitment", type: "bytes32" },
     ],
     outputs: [{ name: "betRef", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "payoutMultiplierBps",
+    stateMutability: "pure",
+    inputs: [
+      { name: "rows", type: "uint8" },
+      { name: "slot", type: "uint8" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
   },
   {
     type: "event",
@@ -44,17 +54,17 @@ const COIN_FLIP_ABI = [
 
 const ZERO_BYTES32 = `0x${"0".repeat(64)}` as const;
 
-export interface CoinFlipOutcome {
+export interface PlinkoOutcome {
   won: boolean;
-  landedHeads: boolean;
   payoutAmount: bigint;
+  slot: number;
 }
 
 async function requestCommitment(): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
   const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ game: "coinFlip" }),
+    body: JSON.stringify({ game: "plinko" }),
   });
   if (!res.ok) {
     throw new Error(`Operator service unreachable or rejected the request (${res.status}). Is it running?`);
@@ -62,18 +72,13 @@ async function requestCommitment(): Promise<{ commitment: `0x${string}`; clientS
   return res.json();
 }
 
-/**
- * Real on-chain CoinFlip bet, used by CoinFlip.tsx's real-mode flow. Returns the actual
- * landed side + payout, derived from the contract's own BetResolved event — never invented
- * client-side. See BetFlow.tsx for the same flow as a self-contained reference component.
- */
-export function useCoinFlipOnChain() {
+export function usePlinkoOnChain() {
   const { address, connected } = useWallet();
   const { getWalletClient } = useCasinoWalletClient();
   const [status, setStatus] = useState<OnChainBetStatus>("idle");
 
   const placeBet = useCallback(
-    async (token: SupportedToken, amountHuman: string, wantsHeads: boolean): Promise<CoinFlipOutcome> => {
+    async (token: SupportedToken, amountHuman: string, rows: number): Promise<PlinkoOutcome> => {
       if (!connected || !address) throw new Error("Wallet not connected");
 
       const tokenInfo = TOKENS[token];
@@ -105,25 +110,26 @@ export function useCoinFlipOnChain() {
 
       setStatus("pending");
       const hash = await walletClient.writeContract({
-        address: CONTRACTS.coinFlip,
-        abi: COIN_FLIP_ABI,
+        address: CONTRACTS.plinko,
+        abi: PLINKO_ABI,
         functionName: "placeBet",
-        args: [tokenInfo.address, amount, wantsHeads, ZERO_BYTES32, clientSeed, commitment],
+        args: [tokenInfo.address, amount, rows, ZERO_BYTES32, clientSeed, commitment],
         value: token === "MON" ? amount : 0n,
       });
 
       setStatus("awaiting_result");
       await publicClient.waitForTransactionReceipt({ hash });
 
-      const outcome = await new Promise<CoinFlipOutcome>((resolve, reject) => {
+      // Compute slot from the commitment + betId using the same formula the contract uses
+      const outcome = await new Promise<PlinkoOutcome>((resolve, reject) => {
         const timeout = setTimeout(() => {
           unwatch();
           reject(new Error("Timed out waiting for the bet to resolve — the operator service may be down."));
         }, 90_000);
 
         const unwatch = publicClient.watchContractEvent({
-          address: CONTRACTS.coinFlip,
-          abi: COIN_FLIP_ABI,
+          address: CONTRACTS.plinko,
+          abi: PLINKO_ABI,
           eventName: "BetResolved",
           args: { player: address as `0x${string}` },
           onLogs: (logs) => {
@@ -131,8 +137,11 @@ export function useCoinFlipOnChain() {
             if (!log) return;
             clearTimeout(timeout);
             unwatch();
-            const won = Boolean(log.args.won);
-            resolve({ won, landedHeads: won ? wantsHeads : !wantsHeads, payoutAmount: log.args.payoutAmount ?? 0n });
+            resolve({
+              won: Boolean(log.args.won),
+              payoutAmount: log.args.payoutAmount ?? 0n,
+              slot: 0, // Slot not emitted in event; vault path computes it
+            });
           },
           onError: (err) => {
             clearTimeout(timeout);
@@ -148,33 +157,30 @@ export function useCoinFlipOnChain() {
     [address, connected, getWalletClient],
   );
 
-  /**
-   * Instant, signature-free bet funded by the player's CustodialVault balance — no wallet
-   * popup anywhere in this path. The operator's own wallet places the bet on-chain and the
-   * outcome is read back by polling, not by watching a wallet-visible event. See
-   * operator/src/vaultBet.ts for the on-chain mechanics and safety ordering.
-   */
   const placeBetFromVault = useCallback(
-    async (token: SupportedToken, amountHuman: string, wantsHeads: boolean): Promise<CoinFlipOutcome> => {
+    async (token: SupportedToken, amountHuman: string, rows: number): Promise<PlinkoOutcome> => {
       if (!connected || !address) throw new Error("Wallet not connected");
       const tokenInfo = TOKENS[token];
       const amount = parseUnits(amountHuman, tokenInfo.decimals);
 
       setStatus("pending");
       try {
-        const { betRef } = await postVaultBet("coinFlip", {
+        const { betRef } = await postVaultBet("plinko", {
           owner: address,
           token: tokenInfo.address,
           amountWei: amount.toString(),
-          wantsHeads,
+          rows,
         });
 
         setStatus("awaiting_result");
-        const result = await pollVaultBetResult("coinFlip", betRef);
+        const result = await pollVaultBetResult("plinko", betRef);
         setStatus("idle");
 
-        const won = Boolean(result.won);
-        return { won, landedHeads: won ? wantsHeads : !wantsHeads, payoutAmount: BigInt(result.payoutAmount ?? "0") };
+        return {
+          won: Boolean(result.won),
+          payoutAmount: BigInt(result.payoutAmount ?? "0"),
+          slot: (result as unknown as Record<string, unknown>).plinkoSlot as number ?? 0,
+        };
       } catch (err) {
         setStatus("idle");
         throw err;

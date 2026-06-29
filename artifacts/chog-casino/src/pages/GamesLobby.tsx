@@ -11,6 +11,7 @@ import rouletteBg from "@assets/image_1781811963908.png";
 import blackjackBg from "@assets/image_1781811969584.png";
 import aviatorBanner from "@assets/aviator/aviator-banner.png";
 import diceBanner from "@assets/dice/dice-cover.png";
+import plinkoBg from "@assets/plinko/plinko-lobby-card.png";
 
 interface Game {
   id: string;
@@ -90,6 +91,17 @@ const games: Game[] = [
     borderColor: "border-cyan-500/30 hover:border-cyan-400/60",
     glowColor: "hover:shadow-[0_0_40px_rgba(34,211,238,0.35)]",
     bgImage: diceBanner,
+  },
+  {
+    id: "plinko",
+    name: "Plinko",
+    emoji: "📍",
+    multiplier: "Up to 1000×",
+    tag: "NEW",
+    tagColor: "bg-yellow-500/20 text-yellow-300 border-yellow-500/40",
+    borderColor: "border-yellow-500/30 hover:border-yellow-400/60",
+    glowColor: "hover:shadow-[0_0_40px_rgba(234,179,8,0.35)]",
+    bgImage: plinkoBg,
   },
 ];
 

@@ -11,10 +11,18 @@ export const monad = defineChain({
   rpcUrls: { default: { http: [config.rpcUrl] } },
 });
 
-// viem's default pollingInterval (4000ms) for watchContractEvent means a placed bet can sit
-// unnoticed for up to 4s before the watcher even starts resolving it — tightened to 1s so the
-// whole place-to-result round trip feels responsive instead of sluggish.
-export const publicClient = createPublicClient({ chain: monad, transport: http(config.rpcUrl), pollingInterval: 1_000 });
+// viem's default pollingInterval (4000ms) for watchContractEvent / waitForTransactionReceipt
+// means a placed bet can sit unnoticed for up to 4s before the watcher even starts resolving it,
+// and EVERY waitForTransactionReceipt call in this codebase (placeBet, debit, revealAndResolve —
+// 2-3 per single bet, all sequential since each depends on the last) pays that same polling
+// delay on top of however long the tx actually took to mine. Confirmed directly: Monad mines a
+// block roughly every 400ms (timestamps 5 blocks apart differed by exactly 2s), so a 1000ms+
+// polling interval was adding up to 600-1000ms of pure waiting-to-notice-it's-already-done
+// overhead PER confirmation, on a chain whose real confirmation time is a few hundred ms. 250ms
+// keeps polling cheap (still a 4-6x margin over actual block time) while cutting that wasted
+// margin to roughly a quarter of what it was — across 2-3 sequential confirmations per bet, this
+// is the single biggest win available for "feels slow to reveal" without changing the contracts.
+export const publicClient = createPublicClient({ chain: monad, transport: http(config.rpcUrl), pollingInterval: 250 });
 
 export const operatorAccount = privateKeyToAccount(config.operatorPrivateKey);
 

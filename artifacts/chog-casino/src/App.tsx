@@ -12,6 +12,7 @@ import Roulette from "@/pages/games/Roulette";
 import Blackjack from "@/pages/games/Blackjack";
 import Aviator from "@/pages/games/Aviator";
 import Dice from "@/pages/games/Dice";
+import Plinko from "@/pages/games/Plinko";
 import Profile from "@/pages/Profile";
 import { mainnet } from "viem/chains";
 import { monad } from "@/chains";
@@ -31,6 +32,7 @@ function Router() {
       <Route path="/games/blackjack" component={Blackjack} />
       <Route path="/games/aviator" component={Aviator} />
       <Route path="/games/dice" component={Dice} />
+      <Route path="/games/plinko" component={Plinko} />
       <Route path="/profile" component={Profile} />
       <Route component={NotFound} />
     </Switch>

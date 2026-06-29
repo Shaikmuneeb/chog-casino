@@ -712,14 +712,44 @@ export default function Aviator() {
               {/* Bet amount row */}
               {isReal ? (
                 connected && (
-                  <BetControls
-                    value={realBetAmount}
-                    onChange={setRealBetAmount}
-                    max={Math.max(1, realBalanceHuman)}
-                    disabled={phase === "crashed"}
-                    step={1}
-                    unitLabel={realToken}
-                  />
+                  <>
+                    <BetControls
+                      value={realBetAmount}
+                      onChange={setRealBetAmount}
+                      max={Math.max(1, realBalanceHuman)}
+                      disabled={phase === "crashed"}
+                      step={1}
+                      unitLabel={realToken}
+                    />
+                    {/* Real-mode bets commit to this target on-chain at placement time — there's
+                        no mid-flight cashout transaction, so it must be set before betting. */}
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-xs text-purple-300/60 font-medium tracking-wide">Cash Out At</span>
+                      <div className="flex items-center gap-1 glass border border-cyan-500/30 rounded-lg px-2 py-1">
+                        <input
+                          type="number"
+                          value={autoCashOutInput}
+                          disabled={betPlaced}
+                          onChange={(e) => {
+                            setAutoCashOutInput(e.target.value);
+                            const v = parseFloat(e.target.value);
+                            if (!isNaN(v) && v >= 1.01) setAutoCashOutMult(parseFloat(v.toFixed(2)));
+                          }}
+                          onBlur={() => {
+                            let v = parseFloat(autoCashOutInput);
+                            if (isNaN(v) || v < 1.01) v = 1.01;
+                            v = parseFloat(v.toFixed(2));
+                            setAutoCashOutMult(v);
+                            setAutoCashOutInput(v.toFixed(2));
+                          }}
+                          step={0.1}
+                          min={1.01}
+                          className="w-14 bg-transparent text-white text-xs font-cinzel font-bold text-center outline-none tabular-nums disabled:opacity-50"
+                        />
+                        <span className="text-[10px] text-purple-300/50">×</span>
+                      </div>
+                    </div>
+                  </>
                 )
               ) : (
                 <>
@@ -853,6 +883,18 @@ export default function Aviator() {
             >
               Cash Out — {(bet * multiplier).toFixed(0)} {currencyLabel}
             </motion.button>
+          ) : phase === "flying" && betPlaced && isReal ? (
+            // Real-mode bets commit to an auto-cashout target on-chain at placement time (the
+            // deployed Crash.sol contract has no instruction for cashing out mid-flight — only
+            // placeBet(autoCashoutBps) and a single resolve once the round ends) — so there's no
+            // live "Cash Out" action to offer here. Showing the locked-in target instead of
+            // leaving this area blank, which otherwise looked like a missing/broken button.
+            <div
+              className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase text-center bg-gradient-to-r from-purple-900 to-purple-800 text-purple-200 border border-purple-500/40"
+              data-testid="aviator-locked-in"
+            >
+              🔒 Auto Cash Out @ {autoCashOutMult.toFixed(2)}×
+            </div>
           ) : phase === "waiting" || phase === "betting" ? (
             <motion.button
               whileHover={canPlaceBet && !betPlaced ? { scale: 1.03, y: -2 } : {}}

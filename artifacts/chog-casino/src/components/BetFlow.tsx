@@ -2,6 +2,7 @@ import { useState } from "react";
 import { parseUnits } from "viem";
 import { useWallet } from "@/hooks/useWallet";
 import { publicClient, useCasinoWalletClient } from "@/lib/casinoClient";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   CONTRACTS,
   ENTROPY_ABI,
@@ -64,7 +65,7 @@ interface BetFlowProps {
  *  Must be called before every commit-reveal placeBet — the contract has no way to verify a
  *  bet's outcome without this, and placeBet itself doesn't validate the commitment is real. */
 async function requestCommitment(game: string): Promise<{ commitment: `0x${string}`; clientSeed: `0x${string}` }> {
-  const res = await fetch(`${OPERATOR_BASE_URL}/commit`, {
+  const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/commit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ game }),

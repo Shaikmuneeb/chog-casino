@@ -14,6 +14,7 @@ import {
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useWallet } from "@/hooks/useWallet";
 import { useCasinoWalletClient, publicClient } from "@/lib/casinoClient";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { ERC20_ABI, CUSTODIAL_VAULT_ABI, CONTRACTS, OPERATOR_BASE_URL, TOKENS, isDeployed, type SupportedToken } from "@/config/contracts";
 import { qrToSvg } from "@/lib/qr";
 
@@ -25,7 +26,7 @@ interface WalletModalProps {
 }
 
 async function fetchDepositAddress(owner: Address): Promise<Address> {
-  const res = await fetch(`${OPERATOR_BASE_URL}/deposit-address`, {
+  const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/deposit-address`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ owner }),

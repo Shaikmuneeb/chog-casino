@@ -3,7 +3,7 @@ import { publicClient, vaultWalletClient, vaultOperatorAccount, deriveDepositAcc
 import { ERC20_ABI, CUSTODIAL_VAULT_ABI } from "./abi.js";
 import { DepositStore } from "./depositStore.js";
 import { config, NATIVE_TOKEN, DEPOSIT_TOKENS } from "./config.js";
-import { writeWithGasBuffer, assertTxSucceeded } from "./txSafety.js";
+import { writeWithGasBuffer, sendValueWithQueue, withRevertRetry, assertTxSucceeded } from "./txSafety.js";
 
 /**
  * Polls every known deposit address for MON/USDC/CHOG balances and sweeps anything found
@@ -29,12 +29,21 @@ export function startDepositWatcher(store: DepositStore) {
 
   // Resume any sweep that moved funds but never got credited (e.g. crashed mid-flow).
   for (const sweep of store.uncreditedSweepsWithTx()) {
-    void creditSweep(store, sweep.owner as Address, sweep.depositAddress as Address, sweep.token as Address, BigInt(sweep.amount));
+    creditSweep(store, sweep.owner as Address, sweep.depositAddress as Address, sweep.token as Address, BigInt(sweep.amount)).catch((err) =>
+      console.error(`[deposit-watcher] failed to resume credit for sweep ${sweep.sweepTxHash}`, err),
+    );
   }
 
-  setInterval(() => {
-    void pollAll(store);
-  }, config.depositPollIntervalMs);
+  // setInterval would let a new cycle start while a slow one is still running (a single ERC20
+  // sweep alone can take several seconds across gas estimation + a top-up + up to 4 retries at
+  // 1.5s apart) — confirmed directly as the cause of repeated CHOG sweep failures: an overlapping
+  // cycle's NATIVE-token sweep swept away the gas float a CHOG-token sweep had just topped up,
+  // moments before the CHOG transfer tried to spend it, every single time. Scheduling the next
+  // poll only after the current one fully finishes makes that impossible.
+  void (async function loop() {
+    await pollAll(store).catch((err) => console.error("[deposit-watcher] poll cycle failed", err));
+    setTimeout(loop, config.depositPollIntervalMs);
+  })();
 }
 
 async function pollAll(store: DepositStore) {
@@ -118,22 +127,73 @@ async function sweep(
     sweepTxHash = await depositClient.sendTransaction({ to: vaultAddress, value: swept, gas: gasLimit * 2n });
   } else {
     // ERC20 sweep needs the deposit address to hold a little MON for gas — top it up from the
-    // vault operator's wallet first if it doesn't already have enough.
-    const nativeBalance = await publicClient.getBalance({ address: depositAddress });
-    if (nativeBalance < config.depositGasReserveWei) {
-      const topUpHash = await vaultWalletClient!.sendTransaction({
-        to: depositAddress,
-        value: config.depositGasReserveWei - nativeBalance,
-      });
+    // vault operator's wallet first if it doesn't already have enough. The required amount is
+    // computed from the ACTUAL transfer's estimated gas cost, not a flat configured reserve:
+    // a real CHOG transfer needed ~82,646 gas (~0.0114 MON at the going gas price), while the
+    // static DEPOSIT_GAS_RESERVE_WEI was only 0.002 MON — far below what any real ERC20
+    // transfer costs.
+    //
+    // Chicken-and-egg bug fixed here: a first version of this function estimated the transfer's
+    // gas cost BEFORE checking/topping-up native balance, on the assumption that gas estimation
+    // doesn't require the sender to actually hold funds. On Monad it does — confirmed directly,
+    // with the deposit address sitting at exactly 0 native MON, `eth_estimateGas` for this exact
+    // transfer call reverted with "Signer had insufficient balance" (a node-level check on the
+    // gas-paying account, unrelated to the ERC20 contract's own logic). That meant the top-up
+    // logic, which only ran *after* the estimate succeeded, never executed at all — a real
+    // sweep attempt for a freshly-derived or fully-drained deposit address could never get off
+    // the ground. Bootstrap a flat, conservative native balance FIRST if it's near zero, so the
+    // gas estimate that follows has something to simulate against; only then refine with the
+    // precise estimate-based top-up for the (rare) call that needs more than the flat bootstrap.
+    // IMPORTANT: route every send from vaultWalletClient through sendValueWithQueue, never
+    // vaultWalletClient.sendTransaction directly. This same wallet also sends credit() calls
+    // (via writeWithGasBuffer, below in creditSweep) for the NATIVE-token sweep path, which runs
+    // for this same address moments before this code does. Calling .sendTransaction() raw here
+    // bypassed txSafety.ts's per-account nonce queue entirely — confirmed directly: it produced
+    // real "Transaction nonce too low" failures on this exact wallet, which is what was actually
+    // causing the CHOG transfer below to fail with "Signer had insufficient balance" (it never
+    // got properly gas-funded, because the raw send here collided with a queued credit() call
+    // and silently lost the nonce race).
+    const BOOTSTRAP_GAS_WEI = 30_000_000_000_000_000n; // 0.03 MON — comfortably above every real ERC20 sweep cost observed so far
+    let nativeBalance = await publicClient.getBalance({ address: depositAddress });
+    if (nativeBalance < BOOTSTRAP_GAS_WEI / 2n) {
+      const bootstrapHash = await sendValueWithQueue(vaultWalletClient!, depositAddress, BOOTSTRAP_GAS_WEI - nativeBalance);
+      await publicClient.waitForTransactionReceipt({ hash: bootstrapHash });
+      nativeBalance = await publicClient.getBalance({ address: depositAddress });
+    }
+
+    const [gasPrice, gasEstimate] = await Promise.all([
+      publicClient.getGasPrice(),
+      publicClient.estimateContractGas({
+        address: token,
+        abi: ERC20_ABI as Abi,
+        functionName: "transfer",
+        args: [vaultAddress, balance],
+        account: depositClient.account,
+      } as Parameters<typeof publicClient.estimateContractGas>[0]),
+    ]);
+    const requiredGasCost = gasPrice * gasEstimate * 2n; // generous margin, same as the native sweep path above
+    if (nativeBalance < requiredGasCost) {
+      const topUpHash = await sendValueWithQueue(vaultWalletClient!, depositAddress, requiredGasCost - nativeBalance);
       await publicClient.waitForTransactionReceipt({ hash: topUpHash });
     }
     swept = balance;
-    sweepTxHash = await writeWithGasBuffer(depositClient, {
-      address: token,
-      abi: ERC20_ABI as Abi,
-      functionName: "transfer",
-      args: [vaultAddress, swept],
-    });
+    // The transfer below has been observed to get rejected outright at *submission* time
+    // ("Signer had insufficient balance", an InternalRpcError from eth_sendRawTransaction, not a
+    // mined revert) even moments after the top-up above was confirmed with plenty of margin —
+    // consistent with Monad's public RPC endpoint being a load-balanced pool of nodes with brief
+    // replication lag, where the node that admits this raw tx hasn't yet seen the balance the
+    // top-up's *own* receipt was confirmed against (on a different node in the pool). Retrying
+    // after a short pause works around exactly this same class of transient inconsistency that
+    // withRevertRetry was already built for elsewhere in this codebase.
+    sweepTxHash = await withRevertRetry(`deposit-watcher CHOG-class sweep ${depositAddress}`, async () => {
+      const hash = await writeWithGasBuffer(depositClient, {
+        address: token,
+        abi: ERC20_ABI as Abi,
+        functionName: "transfer",
+        args: [vaultAddress, swept],
+      });
+      return hash;
+    }, 4);
   }
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: sweepTxHash });

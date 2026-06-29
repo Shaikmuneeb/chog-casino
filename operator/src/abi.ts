@@ -148,6 +148,24 @@ export const CRASH_PLACE_BET_ABI = [
 ] as const;
 export const CRASH_ABI = [...SINGLE_SHOT_GAME_ABI, ...CRASH_PLACE_BET_ABI] as const;
 
+export const PLINKO_PLACE_BET_ABI = [
+  {
+    type: "function",
+    name: "placeBet",
+    stateMutability: "payable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "rows", type: "uint8" },
+      { name: "userRandomNumber", type: "bytes32" },
+      { name: "clientSeed", type: "bytes32" },
+      { name: "serverSeedCommitment", type: "bytes32" },
+    ],
+    outputs: [{ name: "betRef", type: "uint256" }],
+  },
+] as const;
+export const PLINKO_ABI = [...SINGLE_SHOT_GAME_ABI, ...PLINKO_PLACE_BET_ABI] as const;
+
 export const BLACKJACK_ABI = [
   {
     type: "event",
