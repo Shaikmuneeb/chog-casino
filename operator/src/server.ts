@@ -21,6 +21,7 @@ import {
   getVaultBetResult,
   VaultBetError,
 } from "./vaultBet.js";
+import { operatorWithdraw, VaultWithdrawError } from "./vaultWithdraw.js";
 
 const GAME_NAMES: (GameName | "blackjack")[] = [...Object.keys(config.games), "blackjack"] as (GameName | "blackjack")[];
 
@@ -285,6 +286,36 @@ export function startServer(store: SeedStore, depositStore: DepositStore) {
     const result = getVaultBetResult(store, req.params.game, req.params.betRef);
     if (!result) return res.status(404).json({ error: "bet not found" });
     res.json(result);
+  });
+
+  /**
+   * Withdraws from a player's vault balance to an address they specify, executed by the
+   * operator's own wallet — no wallet transaction required from the player. Authenticated by a
+   * free signed message instead (see vaultWithdraw.ts's buildWithdrawMessage/
+   * assertValidWithdrawSignature for why this check is the entire security boundary here).
+   */
+  app.post("/vault-withdraw", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      const to = req.body?.to as string | undefined;
+      const timestamp = req.body?.timestamp as number | undefined;
+      const signature = req.body?.signature as string | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+      if (!to || !isAddress(to)) return res.status(400).json({ error: "to must be a valid address" });
+      if (typeof timestamp !== "number") return res.status(400).json({ error: "timestamp is required" });
+      if (!signature) return res.status(400).json({ error: "signature is required" });
+
+      const result = await operatorWithdraw(owner as Address, token as Address, amountWei, to as Address, timestamp, signature as Hex);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VaultWithdrawError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /vault-withdraw failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
   });
 
   app.get("/health", (_req, res) => res.json({ ok: true }));

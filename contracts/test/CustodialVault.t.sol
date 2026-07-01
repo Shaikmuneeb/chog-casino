@@ -193,6 +193,58 @@ contract CustodialVaultTest is Test {
         assertEq(vault.balanceOf(player, NATIVE), 0);
     }
 
+    function test_OperatorCanWithdrawToArbitraryAddress() public {
+        address payoutTarget = address(0xCA5);
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        uint256 before = payoutTarget.balance;
+        vm.prank(operator);
+        vault.operatorWithdraw(player, NATIVE, 4 ether, payoutTarget, bytes32("req-1"));
+
+        assertEq(payoutTarget.balance, before + 4 ether);
+        assertEq(vault.balanceOf(player, NATIVE), 6 ether);
+    }
+
+    function test_NonOperatorCannotOperatorWithdraw() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        vm.prank(stranger);
+        vm.expectRevert();
+        vault.operatorWithdraw(player, NATIVE, 1 ether, stranger, bytes32("req-1"));
+    }
+
+    function test_OperatorWithdrawRevertsIfInsufficientBalance() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 5 ether, bytes32("sweep-1"));
+
+        vm.prank(operator);
+        vm.expectRevert("insufficient balance");
+        vault.operatorWithdraw(player, NATIVE, 6 ether, player, bytes32("req-1"));
+    }
+
+    function test_OperatorWithdrawRevertsOnZeroRecipient() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 5 ether, bytes32("sweep-1"));
+
+        vm.prank(operator);
+        vm.expectRevert("bad recipient");
+        vault.operatorWithdraw(player, NATIVE, 1 ether, address(0), bytes32("req-1"));
+    }
+
+    function test_PauseBlocksOperatorWithdraw() public {
+        vm.prank(operator);
+        vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));
+
+        vm.prank(admin);
+        vault.pause();
+
+        vm.prank(operator);
+        vm.expectRevert();
+        vault.operatorWithdraw(player, NATIVE, 1 ether, player, bytes32("req-1"));
+    }
+
     function test_TotalLiabilitiesTracksCreditDebitAndWithdraw() public {
         vm.prank(operator);
         vault.credit(player, NATIVE, 10 ether, bytes32("sweep-1"));

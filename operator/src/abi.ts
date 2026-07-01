@@ -362,6 +362,19 @@ export const CUSTODIAL_VAULT_ABI = [
   },
   {
     type: "function",
+    name: "operatorWithdraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "player", type: "address" },
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "to", type: "address" },
+      { name: "requestRef", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "balanceOf",
     stateMutability: "view",
     inputs: [

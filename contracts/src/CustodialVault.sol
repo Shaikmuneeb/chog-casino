@@ -15,11 +15,18 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /// to reflect the real player's win/loss without ever requiring their wallet's signature.
 ///
 /// Security model: only OPERATOR_ROLE (the backend's hot wallet) can credit a player's balance,
-/// after it has verified and swept a real on-chain deposit. But withdrawal is the player's own
-/// transaction — the operator can never block, delay, or redirect a withdrawal once a balance
-/// has been credited. That keeps the operator's hot wallet from being a single point of total
-/// fund loss: a compromised operator key can stop NEW credits, but cannot touch balances already
-/// recorded here.
+/// after it has verified and swept a real on-chain deposit. Withdrawal has two paths: the
+/// player's own signed transaction (withdraw, below — the operator can never block, delay, or
+/// redirect this one), and an operator-executed withdrawal to an address the player specifies
+/// off-chain (operatorWithdraw, below) — added for players whose wallet can't reliably sign
+/// Monad transactions directly (e.g. broken chain support in some wallet apps), following the
+/// same custodial-cashout pattern used by other Monad betting sites. This SECOND path is a
+/// genuine trust tradeoff: it relies on the operator backend correctly authenticating that the
+/// caller of its withdrawal API really is the balance owner (see operator/src/server.ts) before
+/// ever calling this function — a compromised operator key CAN drain any player's balance to any
+/// address via this path, unlike the player-signed path above. Documented here so anyone
+/// auditing this contract understands operatorWithdraw is a deliberate, narrower-than-ideal
+/// trust boundary, not an oversight.
 contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -43,6 +50,7 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
     event Credited(address indexed player, address indexed token, uint256 amount, bytes32 indexed sweepRef);
     event Debited(address indexed player, address indexed token, uint256 amount, bytes32 indexed betRef);
     event Withdrawn(address indexed player, address indexed token, uint256 amount);
+    event OperatorWithdrawn(address indexed player, address indexed to, address indexed token, uint256 amount, bytes32 requestRef);
     event AdminWithdraw(address indexed token, address indexed to, uint256 amount);
 
     constructor(address admin) {
@@ -104,6 +112,35 @@ contract CustodialVault is AccessControl, Pausable, ReentrancyGuard {
         }
 
         emit Withdrawn(msg.sender, token, amount);
+    }
+
+    /// @dev Operator-executed withdrawal to an address the player specified off-chain (the
+    /// operator's HTTP API is responsible for authenticating that the request really came from
+    /// `player` — this contract has no way to verify that itself, since there's no player
+    /// signature on this call at all). `requestRef` is an opaque off-chain reference (e.g. a
+    /// hash of the withdrawal request) purely for audit/event-tracing.
+    function operatorWithdraw(address player, address token, uint256 amount, address to, bytes32 requestRef)
+        external
+        onlyRole(OPERATOR_ROLE)
+        whenNotPaused
+        nonReentrant
+    {
+        require(to != address(0), "bad recipient");
+        require(amount > 0, "zero amount");
+        uint256 bal = balanceOf[player][token];
+        require(bal >= amount, "insufficient balance");
+
+        balanceOf[player][token] = bal - amount;
+        totalLiabilities[token] -= amount;
+
+        if (token == NATIVE_TOKEN) {
+            (bool ok, ) = payable(to).call{value: amount}("");
+            require(ok, "native withdraw failed");
+        } else {
+            IERC20(token).safeTransfer(to, amount);
+        }
+
+        emit OperatorWithdrawn(player, to, token, amount, requestRef);
     }
 
     // ── Admin ──

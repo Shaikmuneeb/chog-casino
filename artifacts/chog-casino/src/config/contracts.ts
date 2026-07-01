@@ -30,7 +30,7 @@ export const CONTRACTS = {
   crash: "0x83B779059B82f149F86e96B04c9700bb15b45a63" as `0x${string}`,
   blackjack: "0x4e05B532c7bf3250979265cB096A39E1A344d3da" as `0x${string}`,
   plinko: "0xCcCc543730094d963361Fc354eFEE0225F10699E" as `0x${string}`,
-  custodialVault: "0xdfcd55D4368995a2f79860dAD5364C51c32Eb9f1" as `0x${string}`,
+  custodialVault: "0x2c43f0d63f3a2336fd7ca3c9401f2fe7cd9aa4a3" as `0x${string}`,
 };
 
 export function isDeployed(address: `0x${string}`): boolean {

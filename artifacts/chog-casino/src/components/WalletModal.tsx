@@ -11,10 +11,11 @@ import {
   Loader2,
   ArrowRight,
 } from "lucide-react";
-import { formatUnits, parseUnits, type Address } from "viem";
+import { formatUnits, parseUnits, isAddress, type Address } from "viem";
 import { useWallet } from "@/hooks/useWallet";
 import { useCasinoWalletClient, publicClient } from "@/lib/casinoClient";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { postVaultWithdraw } from "@/lib/vaultBet";
 import { ERC20_ABI, CUSTODIAL_VAULT_ABI, CONTRACTS, OPERATOR_BASE_URL, TOKENS, isDeployed, type SupportedToken } from "@/config/contracts";
 import { qrToSvg } from "@/lib/qr";
 
@@ -58,8 +59,10 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawToken, setWithdrawToken] = useState<SupportedToken>("MON");
   const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [withdrawTo, setWithdrawTo] = useState("");
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawSuccess, setWithdrawSuccess] = useState(false);
+  const [withdrawRetrying, setWithdrawRetrying] = useState(0);
 
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -184,9 +187,10 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ── Withdraw: CustodialVault → Connected wallet. Player-signed directly against the vault —
-  // no backend involved, so the operator can never block or delay a withdrawal once a balance
-  // has been credited. See CustodialVault.sol's doc comment for the full rationale. ──
+  // ── Withdraw: CustodialVault → any address you specify, executed by the operator's own
+  // wallet. Authenticated by a free signed message (see operator/src/vaultWithdraw.ts) instead
+  // of a wallet transaction — no gas, and works even on wallets with incomplete/broken Monad
+  // transaction support (the original motivation: withdraw was failing silently on Phantom). ──
   const validateWithdraw = useCallback((): string | null => {
     if (!withdrawAmount || Number(withdrawAmount) <= 0) return "Enter a valid amount.";
     const decimals = TOKENS[withdrawToken].decimals;
@@ -194,8 +198,47 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
     try { parsed = parseUnits(withdrawAmount, decimals); } catch { return "Invalid amount."; }
     const bal = vaultBalances[withdrawToken] ?? 0n;
     if (parsed > bal) return "Insufficient in-game balance.";
+    if (!withdrawTo || !isAddress(withdrawTo)) return "Enter a valid destination address.";
     return null;
-  }, [withdrawAmount, withdrawToken, vaultBalances]);
+  }, [withdrawAmount, withdrawToken, vaultBalances, withdrawTo]);
+
+  // Player-signed fallback against the CURRENTLY deployed vault's own withdraw(token, amount) —
+  // msg.sender-only, so only usable when withdrawing to your own connected wallet. Kept as a
+  // fallback so withdrawing to yourself keeps working even before the operatorWithdraw contract
+  // upgrade (see below) has been deployed; see CustodialVault.sol's withdraw() doc comment.
+  const executeSelfWithdrawFallback = async (token: Address, amount: bigint) => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) {
+          setWithdrawRetrying(attempt);
+          await publicClient.simulateContract({
+            address: CONTRACTS.custodialVault,
+            abi: CUSTODIAL_VAULT_ABI,
+            functionName: "withdraw",
+            args: [token, amount],
+            account: address as Address,
+          });
+        }
+        const walletClient = await getWalletClient(address as Address);
+        const hash = await walletClient.writeContract({
+          address: CONTRACTS.custodialVault,
+          abi: CUSTODIAL_VAULT_ABI,
+          functionName: "withdraw",
+          args: [token, amount],
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") throw new Error("withdraw reverted on-chain");
+        return;
+      } catch (err: unknown) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("user rejected") || msg.includes("User denied")) throw err;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+    }
+    throw lastErr;
+  };
 
   const executeWithdraw = async () => {
     const err = validateWithdraw();
@@ -204,33 +247,92 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
 
     setWithdrawError(null);
     setWithdrawing(true);
+    setWithdrawRetrying(0);
 
-    try {
-      const decimals = TOKENS[withdrawToken].decimals;
-      const amount = parseUnits(withdrawAmount, decimals);
-      const walletClient = await getWalletClient(address as Address);
+    const decimals = TOKENS[withdrawToken].decimals;
+    const amount = parseUnits(withdrawAmount, decimals);
+    const amountWei = amount.toString();
+    const token = TOKENS[withdrawToken].address;
+    const to = withdrawTo as Address;
+    const isSelfWithdraw = to.toLowerCase() === address.toLowerCase();
+    const timestamp = Date.now();
 
-      const hash = await walletClient.writeContract({
-        address: CONTRACTS.custodialVault,
-        abi: CUSTODIAL_VAULT_ABI,
-        functionName: "withdraw",
-        args: [TOKENS[withdrawToken].address, amount],
-      });
-      await publicClient.waitForTransactionReceipt({ hash });
+    // The message must embed every field the on-chain call actually acts on (owner, token,
+    // amount, destination, timestamp) — otherwise a signature obtained for one withdrawal could
+    // be replayed to authorize a DIFFERENT one. See operator/src/vaultWithdraw.ts's
+    // buildWithdrawMessage, which must stay byte-for-byte identical to this.
+    const message = `Withdraw ${amountWei} of ${token} from Chog Casino vault (${address}) to ${to} at ${timestamp}`;
 
-      setWithdrawSuccess(true);
-      fetchBalances();
-      fetchVaultBalances();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("user rejected") || msg.includes("User denied")) {
-        setWithdrawError("Transaction rejected.");
-      } else {
-        setWithdrawError("Withdrawal failed. Check your in-game balance and try again.");
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) setWithdrawRetrying(attempt);
+        const walletClient = await getWalletClient(address as Address);
+        // A free, gas-less signed message — not a transaction, so this works identically on
+        // every EVM wallet regardless of how well it supports actually submitting Monad
+        // transactions (the original bug report: withdraw silently failing on Phantom).
+        const signature = await walletClient.signMessage({ account: address as Address, message });
+
+        const { txHash } = await postVaultWithdraw({ owner: address, token, amountWei, to, timestamp, signature });
+        void txHash;
+
+        setWithdrawSuccess(true);
+        fetchBalances();
+        fetchVaultBalances();
+        setWithdrawing(false);
+        setWithdrawRetrying(0);
+        return;
+      } catch (err: unknown) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("user rejected") || msg.includes("User denied")) {
+          setWithdrawError("Signature rejected.");
+          setWithdrawing(false);
+          setWithdrawRetrying(0);
+          return;
+        }
+        if (msg.includes("insufficient") || msg.includes("expired") || msg.includes("verify wallet signature")) break;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1200));
       }
-    } finally {
-      setWithdrawing(false);
     }
+
+    // The operator-executed path needs a contract upgrade that may not be live yet (see
+    // CustodialVault.sol's operatorWithdraw) — every attempt above failed with something other
+    // than a clear "insufficient balance"/expired-signature reason, consistent with that. Fall
+    // back to the currently-deployed contract's own player-signed withdraw() when possible
+    // (self-withdraw only) rather than leaving the player with no way to get their funds out.
+    if (isSelfWithdraw) {
+      try {
+        setWithdrawRetrying(0);
+        await executeSelfWithdrawFallback(token, amount);
+        setWithdrawSuccess(true);
+        fetchBalances();
+        fetchVaultBalances();
+        setWithdrawing(false);
+        setWithdrawRetrying(0);
+        return;
+      } catch (err: unknown) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("user rejected") || msg.includes("User denied")) {
+          setWithdrawError("Transaction rejected.");
+          setWithdrawing(false);
+          setWithdrawRetrying(0);
+          return;
+        }
+      }
+    }
+
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    setWithdrawError(
+      msg.includes("insufficient")
+        ? "Insufficient in-game balance."
+        : isSelfWithdraw
+          ? "Withdrawal failed. Please try again."
+          : "Withdrawing to a different address isn't live yet — try withdrawing to your own connected wallet instead.",
+    );
+    setWithdrawing(false);
+    setWithdrawRetrying(0);
   };
 
   if (!open || !connected || !address) return null;
@@ -333,7 +435,7 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
                       Deposit
                     </button>
                     <button
-                      onClick={() => setView("withdraw")}
+                      onClick={() => { setWithdrawTo(address ?? ""); setView("withdraw"); }}
                       disabled={!vaultReady}
                       className="flex items-center justify-center gap-2 py-3 rounded-xl border border-purple-500/30 text-purple-200 hover:bg-purple-800/20 hover:border-purple-400/40 transition-all text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                       data-testid="wallet-withdraw"
@@ -527,7 +629,9 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
                     <div className="text-center">
                       <div className="text-[10px] text-purple-300/40 mb-1">To</div>
                       <div className="px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 font-mono">
-                        {shortAddress}
+                        {withdrawTo && isAddress(withdrawTo)
+                          ? `${withdrawTo.slice(0, 6)}...${withdrawTo.slice(-4)}`
+                          : "Enter address"}
                       </div>
                     </div>
                   </div>
@@ -550,6 +654,35 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
                     </div>
                   ) : (
                     <>
+                      {/* Destination address */}
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-2 px-1">
+                          <div className="text-[10px] text-purple-300/40 tracking-widest uppercase">
+                            Destination Address
+                          </div>
+                          {address && withdrawTo !== address && (
+                            <button
+                              onClick={() => setWithdrawTo(address)}
+                              className="text-[10px] font-bold text-purple-300 hover:text-white transition-colors"
+                            >
+                              Use connected wallet
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={withdrawTo}
+                          onChange={(e) => { setWithdrawTo(e.target.value.trim()); setWithdrawError(null); }}
+                          placeholder="0x..."
+                          spellCheck={false}
+                          className="w-full glass rounded-xl border border-purple-500/20 p-3 bg-transparent text-white text-sm font-mono outline-none placeholder:text-purple-300/20 focus:border-purple-400/40"
+                          data-testid="withdraw-to-input"
+                        />
+                        {withdrawTo && !isAddress(withdrawTo) && (
+                          <p className="text-[10px] text-red-300/70 mt-1 px-1">Not a valid address.</p>
+                        )}
+                      </div>
+
                       {/* Token selector */}
                       <div className="mb-4">
                         <div className="text-[10px] text-purple-300/40 tracking-widest uppercase mb-2 px-1">
@@ -615,23 +748,21 @@ export default function WalletModal({ open, onClose }: WalletModalProps) {
 
                       <button
                         onClick={executeWithdraw}
-                        disabled={withdrawing || !withdrawAmount}
+                        disabled={withdrawing || !withdrawAmount || !withdrawTo || !isAddress(withdrawTo)}
                         className="w-full py-4 rounded-xl font-cinzel font-black text-sm tracking-[0.15em] uppercase transition-all bg-gradient-to-r from-purple-600 to-purple-800 text-white border border-purple-400/30 neon-purple disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
                         data-testid="withdraw-confirm"
                       >
                         {withdrawing ? (
                           <span className="flex items-center justify-center gap-2">
                             <Loader2 className="w-4 h-4 animate-spin" />
-                            Confirm in your wallet...
+                            {withdrawRetrying > 0 ? `Retrying (${withdrawRetrying}/2)...` : "Sign to confirm..."}
                           </span>
                         ) : (
-                          "Withdraw to Connected Wallet"
+                          "Withdraw to Address"
                         )}
                       </button>
-
                       <p className="text-[10px] text-purple-300/30 text-center mt-3">
-                        This requires your wallet's signature — funds go straight from the
-                        vault to your connected wallet, no backend approval needed.
+                        This requires a free signature to prove it's really you — no gas, no on-chain transaction.
                       </p>
                     </>
                   )}

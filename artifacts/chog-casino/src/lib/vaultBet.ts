@@ -42,6 +42,13 @@ export function postVaultBetAction<R>(path: string, body: Record<string, unknown
   return postToOperator<R>(`/vault-bet/${path}`, body);
 }
 
+/** Withdraws from a player's vault balance to an address they choose, executed by the operator
+ *  — see operator/src/vaultWithdraw.ts. Authenticated by a free signed message (no gas, no
+ *  Monad-transaction support required from the wallet) instead of a wallet transaction. */
+export function postVaultWithdraw(body: Record<string, unknown>): Promise<{ txHash: string }> {
+  return postToOperator<{ txHash: string }>("/vault-withdraw", body);
+}
+
 export async function pollVaultBetResult(game: string, betRef: string, timeoutMs = 90_000): Promise<VaultBetResult> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
