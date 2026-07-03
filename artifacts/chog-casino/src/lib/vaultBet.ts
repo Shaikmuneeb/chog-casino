@@ -49,6 +49,25 @@ export function postVaultWithdraw(body: Record<string, unknown>): Promise<{ txHa
   return postToOperator<{ txHash: string }>("/vault-withdraw", body);
 }
 
+// ── Aviator/Crash with real manual cash-out (operator-driven) — see operator/src/crashRound.ts ──
+export interface CrashStartResult { roundId: string; commitment: string; clientSeed: string; startTime: number }
+export interface CrashCashoutResult { status: "won" | "lost"; multiplier: number; payoutAmount: string; crashPoint: number; serverSeed: string }
+export interface CrashStatusResult { status: "flying" | "won" | "lost"; crashPoint?: number; serverSeed?: string }
+
+export function startCrashRound(body: { owner: string; token: string; amountWei: string }): Promise<CrashStartResult> {
+  return postToOperator<CrashStartResult>("/crash/start", body);
+}
+
+export function cashoutCrashRound(roundId: string): Promise<CrashCashoutResult> {
+  return postToOperator<CrashCashoutResult>(`/crash/${roundId}/cashout`, {});
+}
+
+export async function getCrashStatus(roundId: string): Promise<CrashStatusResult> {
+  const res = await fetchWithTimeout(`${OPERATOR_BASE_URL}/crash/${roundId}/status`, undefined, OPERATOR_TIMEOUT);
+  if (!res.ok) throw new Error(`Could not check crash status (${res.status})`);
+  return res.json();
+}
+
 export async function pollVaultBetResult(game: string, betRef: string, timeoutMs = 90_000): Promise<VaultBetResult> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {

@@ -22,6 +22,7 @@ import {
   VaultBetError,
 } from "./vaultBet.js";
 import { operatorWithdraw, VaultWithdrawError } from "./vaultWithdraw.js";
+import { startCrashRound, cashoutCrashRound, getCrashStatus, CrashRoundError } from "./crashRound.js";
 
 const GAME_NAMES: (GameName | "blackjack")[] = [...Object.keys(config.games), "blackjack"] as (GameName | "blackjack")[];
 
@@ -314,6 +315,47 @@ export function startServer(store: SeedStore, depositStore: DepositStore) {
     } catch (err) {
       if (err instanceof VaultWithdrawError) return res.status(err.status).json({ error: err.message });
       console.error("[server] /vault-withdraw failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  // ── Aviator/Crash with real manual cash-out (operator-driven, vault-settled) ──
+  // See operator/src/crashRound.ts for why this is settled off the vault instead of via Crash.sol.
+  app.post("/crash/start", async (req, res) => {
+    try {
+      const owner = req.body?.owner as string | undefined;
+      const token = req.body?.token as string | undefined;
+      const amountWei = req.body?.amountWei as string | undefined;
+      if (!owner || !isAddress(owner)) return res.status(400).json({ error: "owner must be a valid address" });
+      if (!token || !isAddress(token)) return res.status(400).json({ error: "token must be a valid address" });
+      if (!amountWei) return res.status(400).json({ error: "amountWei is required" });
+
+      const result = await startCrashRound(owner as Address, token as Address, amountWei);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof CrashRoundError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /crash/start failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.post("/crash/:roundId/cashout", async (req, res) => {
+    try {
+      const result = await cashoutCrashRound(req.params.roundId);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof CrashRoundError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /crash/cashout failed", err);
+      res.status(500).json({ error: "internal error" });
+    }
+  });
+
+  app.get("/crash/:roundId/status", (req, res) => {
+    try {
+      res.json(getCrashStatus(req.params.roundId));
+    } catch (err) {
+      if (err instanceof CrashRoundError) return res.status(err.status).json({ error: err.message });
+      console.error("[server] /crash/status failed", err);
       res.status(500).json({ error: "internal error" });
     }
   });

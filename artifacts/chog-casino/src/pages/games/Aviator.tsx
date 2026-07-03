@@ -9,8 +9,8 @@ import WalletGateNotice from "@/components/WalletGateNotice";
 import { useGameBalance } from "@/hooks/useGameBalance";
 import { useGameMode } from "@/context/GameModeContext";
 import { useWallet } from "@/hooks/useWallet";
-import { useCrashOnChain } from "@/hooks/useCrashOnChain";
 import { publicClient } from "@/lib/casinoClient";
+import { startCrashRound, cashoutCrashRound, getCrashStatus } from "@/lib/vaultBet";
 import { CUSTODIAL_VAULT_ABI, TOKENS, isDeployed, CONTRACTS, type SupportedToken } from "@/config/contracts";
 import bgImage from "@assets/image_1781811777784.png";
 import aviatorBg from "@assets/aviator/aviator-bg.png";
@@ -224,7 +224,9 @@ export default function Aviator() {
   const [realBalanceRaw, setRealBalanceRaw] = useState(0n);
   const [chainError, setChainError] = useState<string | null>(null);
   const [realPayout, setRealPayout] = useState<bigint | null>(null);
-  const { placeBetFromVault } = useCrashOnChain();
+  const [realCashingOut, setRealCashingOut] = useState(false);
+  const crashRoundIdRef = useRef<string | null>(null);
+  const crashPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const deployed = isDeployed(CONTRACTS.crash) && isDeployed(CONTRACTS.treasury) && isDeployed(CONTRACTS.custodialVault);
 
   useEffect(() => {
@@ -315,6 +317,10 @@ export default function Aviator() {
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
+    }
+    if (crashPollRef.current) {
+      clearInterval(crashPollRef.current);
+      crashPollRef.current = null;
     }
     stopEngineSound();
   }, []);
@@ -437,42 +443,135 @@ export default function Aviator() {
 
   startBettingRef.current = startBetting;
 
+  // Real-mode flight: the operator locks a provably-fair crash point behind a committed seed,
+  // debits the stake, and flies. The client animates the SAME e^(0.18·t) curve the operator uses,
+  // but never knows the crash point — it polls the operator to learn when the plane really busts,
+  // and the actual win/loss is decided server-side at the moment Cash Out is pressed. This is what
+  // makes a genuine tap-anytime cash-out possible without the deployed Crash.sol (see
+  // operator/src/crashRound.ts for the full rationale).
+  const startRealFlight = useCallback(async () => {
+    if (!address) return;
+    setChainError(null);
+    setRealPayout(null);
+    setResultMsg(null);
+    betPlacedRef.current = true;
+    setBetPlaced(true);
+    try {
+      const amountWei = (BigInt(realBetAmount) * 10n ** BigInt(TOKENS[realToken].decimals)).toString();
+      const { roundId } = await startCrashRound({ owner: address, token: TOKENS[realToken].address, amountWei });
+      crashRoundIdRef.current = roundId;
+      cashedOutRef.current = false;
+      setCashedOut(false);
+      multiplierRef.current = 1.0;
+      setMultiplier(1.0);
+      setPhase("flying");
+      startEngineSound();
+
+      const flightStart = performance.now();
+      const loop = (now: number) => {
+        const elapsed = (now - flightStart) / 1000;
+        const raw = Math.pow(Math.E, elapsed * 0.18);
+        multiplierRef.current = raw;
+        setMultiplier(raw);
+        updateEngineSound(raw);
+        rafRef.current = requestAnimationFrame(loop);
+      };
+      rafRef.current = requestAnimationFrame(loop);
+
+      // Poll the operator to learn the real bust moment (the client is never told it in advance).
+      crashPollRef.current = setInterval(async () => {
+        try {
+          const s = await getCrashStatus(roundId);
+          if (s.status !== "flying") {
+            if (crashPollRef.current) { clearInterval(crashPollRef.current); crashPollRef.current = null; }
+            if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+            const cp = s.crashPoint ?? multiplierRef.current;
+            multiplierRef.current = cp;
+            setMultiplier(cp);
+            setPhase("crashed");
+            playCrashSound();
+            stopEngineSound();
+            setHistory((prev) => [cp, ...prev].slice(0, MAX_HISTORY));
+            if (!cashedOutRef.current) {
+              setResultMsg({ text: `CRASHED at ${cp.toFixed(2)}× — Lost ${realBetAmount} ${realToken}`, cls: "text-red-400" });
+            }
+            crashRoundIdRef.current = null;
+            timerRef.current = setTimeout(() => {
+              betPlacedRef.current = false;
+              setBetPlaced(false);
+              cashedOutRef.current = false;
+              setCashedOut(false);
+              setPhase("waiting");
+            }, WAITING_DURATION);
+          }
+        } catch {
+          /* transient — keep polling */
+        }
+      }, 250);
+    } catch (err) {
+      betPlacedRef.current = false;
+      setBetPlaced(false);
+      setPhase("waiting");
+      setChainError(err instanceof Error ? err.message : "Bet failed");
+    }
+  }, [address, realBetAmount, realToken]);
+
+  const realCashOut = useCallback(async () => {
+    const roundId = crashRoundIdRef.current;
+    if (!roundId || cashedOutRef.current || realCashingOut) return;
+    setRealCashingOut(true);
+    try {
+      const outcome = await cashoutCrashRound(roundId);
+      if (outcome.status === "won") {
+        cashedOutRef.current = true;
+        setCashedOut(true);
+        setRealPayout(BigInt(outcome.payoutAmount));
+        playCashoutSound();
+        setResultMsg({
+          text: `Cashed out at ${outcome.multiplier.toFixed(2)}×  +${Number(formatUnits(BigInt(outcome.payoutAmount), TOKENS[realToken].decimals))} ${realToken}`,
+          cls: "text-green-400",
+        });
+      } else {
+        // Server clock says the plane had already busted before this tap landed.
+        setResultMsg({ text: `Too late — crashed at ${outcome.crashPoint.toFixed(2)}×`, cls: "text-red-400" });
+      }
+    } catch (err) {
+      setChainError(err instanceof Error ? err.message : "Cash out failed");
+    } finally {
+      setRealCashingOut(false);
+    }
+  }, [realCashingOut, realToken]);
+
   const placeBet = useCallback(() => {
     if (!canPlaceBet || betPlacedRef.current) return;
     audioCtx(); // unlock audio on this user gesture
     if (isReal) {
-      // Real mode: place on-chain bet with auto-cashout
-      setChainError(null);
-      setRealPayout(null);
-      placeBetFromVault(realToken, String(realBetAmount), autoCashOutMult)
-        .then((outcome) => {
-          setRealPayout(outcome.payoutAmount);
-          if (outcome.won) {
-            setResultMsg({
-              text: `Cashed out at ${autoCashOutMult.toFixed(2)}×  +${Number(formatUnits(outcome.payoutAmount, TOKENS[realToken].decimals))} ${realToken}`,
-              cls: "text-green-400",
-            });
-          } else {
-            setResultMsg({
-              text: `CRASHED — Lost ${realBetAmount} ${realToken}`,
-              cls: "text-red-400",
-            });
-          }
-        })
-        .catch((err) => {
-          setChainError(err instanceof Error ? err.message : "Bet failed");
-        });
-    } else {
-      updateBalance((b) => b - bet);
+      void startRealFlight();
+      return;
     }
+    updateBalance((b) => b - bet);
     betPlacedRef.current = true;
     setBetPlaced(true);
-  }, [canPlaceBet, isReal, placeBetFromVault, realToken, realBetAmount, autoCashOutMult, bet, updateBalance]);
+  }, [canPlaceBet, isReal, startRealFlight, bet, updateBalance]);
 
+  // Fun mode runs a continuous auto-looping round (betting countdown → auto-fly). Real mode is
+  // player-initiated instead — each flight only starts when you place a real bet — so the fun
+  // loop must NOT run there (it would also front-run the operator round). Start/stop the loop as
+  // the mode changes rather than unconditionally on mount.
   useEffect(() => {
-    startBetting();
+    if (!isReal) {
+      startBetting();
+    } else {
+      clearTimers();
+      if (crashPollRef.current) { clearInterval(crashPollRef.current); crashPollRef.current = null; }
+      setPhase("waiting");
+      betPlacedRef.current = false;
+      setBetPlaced(false);
+      cashedOutRef.current = false;
+      setCashedOut(false);
+    }
     return clearTimers;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isReal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const showPlane = phase === "flying" || phase === "cashed";
 
@@ -721,34 +820,10 @@ export default function Aviator() {
                       step={1}
                       unitLabel={realToken}
                     />
-                    {/* Real-mode bets commit to this target on-chain at placement time — there's
-                        no mid-flight cashout transaction, so it must be set before betting. */}
-                    <div className="flex items-center justify-between px-1">
-                      <span className="text-xs text-purple-300/60 font-medium tracking-wide">Cash Out At</span>
-                      <div className="flex items-center gap-1 glass border border-cyan-500/30 rounded-lg px-2 py-1">
-                        <input
-                          type="number"
-                          value={autoCashOutInput}
-                          disabled={betPlaced}
-                          onChange={(e) => {
-                            setAutoCashOutInput(e.target.value);
-                            const v = parseFloat(e.target.value);
-                            if (!isNaN(v) && v >= 1.01) setAutoCashOutMult(parseFloat(v.toFixed(2)));
-                          }}
-                          onBlur={() => {
-                            let v = parseFloat(autoCashOutInput);
-                            if (isNaN(v) || v < 1.01) v = 1.01;
-                            v = parseFloat(v.toFixed(2));
-                            setAutoCashOutMult(v);
-                            setAutoCashOutInput(v.toFixed(2));
-                          }}
-                          step={0.1}
-                          min={1.01}
-                          className="w-14 bg-transparent text-white text-xs font-cinzel font-bold text-center outline-none tabular-nums disabled:opacity-50"
-                        />
-                        <span className="text-[10px] text-purple-300/50">×</span>
-                      </div>
-                    </div>
+                    <p className="text-[10px] text-purple-300/40 text-center px-1">
+                      Place your bet, then tap <span className="text-green-300/70 font-semibold">Cash Out</span> any
+                      time before the plane flies away.
+                    </p>
                   </>
                 )
               ) : (
@@ -884,17 +959,22 @@ export default function Aviator() {
               Cash Out — {(bet * multiplier).toFixed(0)} {currencyLabel}
             </motion.button>
           ) : phase === "flying" && betPlaced && isReal ? (
-            // Real-mode bets commit to an auto-cashout target on-chain at placement time (the
-            // deployed Crash.sol contract has no instruction for cashing out mid-flight — only
-            // placeBet(autoCashoutBps) and a single resolve once the round ends) — so there's no
-            // live "Cash Out" action to offer here. Showing the locked-in target instead of
-            // leaving this area blank, which otherwise looked like a missing/broken button.
-            <div
-              className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase text-center bg-gradient-to-r from-purple-900 to-purple-800 text-purple-200 border border-purple-500/40"
-              data-testid="aviator-locked-in"
+            // Real manual cash-out: settled server-side the instant it's tapped, at whatever
+            // multiplier the plane has climbed to (see operator/src/crashRound.ts).
+            <motion.button
+              whileHover={{ scale: 1.03, y: -2 }}
+              whileTap={{ scale: 0.97 }}
+              onClick={realCashOut}
+              disabled={realCashingOut}
+              className="w-full py-5 rounded-xl font-cinzel font-black text-base tracking-[0.2em] uppercase bg-gradient-to-r from-green-600 to-green-800 text-white border border-green-400/30 neon-green transition-all disabled:opacity-60"
+              data-testid="button-cashout-real"
             >
-              🔒 Auto Cash Out @ {autoCashOutMult.toFixed(2)}×
-            </div>
+              {realCashingOut ? (
+                <span className="inline-flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Cashing Out…</span>
+              ) : (
+                `Cash Out — ${(realBetAmount * multiplier).toFixed(2)} ${realToken}`
+              )}
+            </motion.button>
           ) : phase === "waiting" || phase === "betting" ? (
             <motion.button
               whileHover={canPlaceBet && !betPlaced ? { scale: 1.03, y: -2 } : {}}
